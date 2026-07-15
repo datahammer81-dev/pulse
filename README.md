@@ -24,6 +24,14 @@ drive SMART data, and more.
 - **Health score** (0–100) computed from live checks: drive SMART status, free
   space per volume, memory pressure, Windows Defender state, pending reboot,
   uptime, GPU temperature, battery wear (laptops)
+- **Customizable dashboard** — your home page is a widget grid you control:
+  charts, stat tiles, per-core grid, top processes… add, resize, reorder, remove.
+  Pin any hardware sensor to it with one click. Layout saves automatically.
+- **Deep sensors via LibreHardwareMonitor** (optional) — run the free, open-source
+  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+  with its HTTP server on and Pulse auto-detects it: CPU package/core temps, every
+  fan RPM, voltages, power draw, board/VRM temps — all pinnable, all with 30-min
+  history. Without it, Pulse still works with everything Windows exposes natively.
 - **Gaming-HUD interface** — dark corner-cut panels, sidebar navigation, animated
   live numbers, one page per subsystem
 - **30-minute history on every chart** — recorded server-side even while you're

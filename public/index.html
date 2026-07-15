@@ -227,6 +227,50 @@
   #rail-foot .elevate { cursor: pointer; }
   #rail-foot .elevate:hover { color: var(--warn); text-decoration: underline; }
 
+  /* HUD buttons & dashboard editing */
+  .hud-btn {
+    background: var(--accent); border: 0; color: #fff; padding: 6px 14px; cursor: pointer;
+    font-size: 11px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase;
+    clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 7px 100%, 0 calc(100% - 7px));
+  }
+  .hud-btn.ghost { background: var(--panel); border: 1px solid var(--baseline); color: var(--ink-2); }
+  .hud-btn:hover { filter: brightness(1.15); }
+  .wctl { display: inline-flex; gap: 4px; }
+  .wctl button {
+    background: var(--panel-2); border: 1px solid var(--baseline); color: var(--muted);
+    width: 22px; height: 20px; cursor: pointer; font-size: 10px; padding: 0;
+  }
+  .wctl button:hover { color: var(--ink); border-color: var(--muted); }
+  .wctl button.x:hover { color: var(--crit); border-color: var(--crit); }
+  select {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--baseline);
+    padding: 6px 9px; font-size: 12px; outline: none; max-width: 320px;
+  }
+
+  /* sensors page */
+  .sn-cat { margin-bottom: 4px; }
+  .sn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin: 8px 0 16px; }
+  .sn-tile {
+    background: var(--panel-2); border: 1px solid var(--grid); padding: 9px 11px; position: relative;
+    clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+  }
+  .sn-tile .sn-name { font-size: 11px; color: var(--muted); margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sn-tile b { font-size: 17px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .sn-tile .pin {
+    position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity .15s;
+    background: none; border: 1px solid var(--baseline); color: var(--muted); font-size: 10px; padding: 1px 6px; cursor: pointer;
+  }
+  .sn-tile:hover .pin { opacity: 1; }
+  .sn-tile .pin:hover { color: var(--good); border-color: var(--good); }
+  .guide-steps { list-style: none; counter-reset: step; margin: 12px 0; }
+  .guide-steps li { counter-increment: step; display: flex; gap: 12px; padding: 8px 0; font-size: 13px; color: var(--ink-2); align-items: baseline; }
+  .guide-steps li::before {
+    content: counter(step); flex: none; width: 22px; height: 22px; background: var(--accent); color: #fff;
+    font-weight: 800; font-size: 12px; display: inline-flex; align-items: center; justify-content: center;
+    clip-path: polygon(0 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 5px 100%, 0 calc(100% - 5px));
+  }
+  .guide-steps a { color: var(--cpu); }
+
   @media (max-width: 1150px) {
     .stat-row { grid-template-columns: repeat(2, 1fr); }
     .core-grid { grid-template-columns: repeat(4, 1fr); }
@@ -452,7 +496,7 @@ class TimeChart {
 
 /* ---------- shared live state ---------- */
 const bus = new EventTarget();
-const live = { fast: null, gpu: null, disks: null, staticInfo: null };
+const live = { fast: null, gpu: null, disks: null, sensors: null, staticInfo: null };
 
 const es = new EventSource('/api/live');
 es.onopen = () => {
@@ -460,7 +504,7 @@ es.onopen = () => {
   loadStatic(); // after an elevated relaunch the admin badge and sensors change
 };
 es.onerror = () => { $('live-dot').classList.remove('on'); $('live-label').textContent = 'reconnecting'; };
-for (const ev of ['fast', 'gpu', 'disks']) {
+for (const ev of ['fast', 'gpu', 'disks', 'sensors']) {
   es.addEventListener(ev, e => {
     live[ev] = JSON.parse(e.data);
     if (ev === 'fast') {
@@ -507,12 +551,14 @@ const histCols = keys => fetch('/api/history').then(r => r.json()).then(hst => {
 
 /* ---------- page framework ---------- */
 const PAGES = [
+  { id: 'dashboard', label: 'Dashboard', glyph: '⌂' },
   { id: 'overview',  label: 'Overview',  glyph: '◈' },
   { id: 'cpu',       label: 'CPU',       glyph: '▣' },
   { id: 'gpu',       label: 'GPU',       glyph: '◇' },
   { id: 'memory',    label: 'Memory',    glyph: '▤' },
   { id: 'storage',   label: 'Storage',   glyph: '◫' },
   { id: 'network',   label: 'Network',   glyph: '⇅' },
+  { id: 'sensors',   label: 'Sensors',   glyph: '≈' },
   { id: 'processes', label: 'Processes', glyph: '≣' },
 ];
 $('nav').innerHTML = PAGES.map(p =>
@@ -528,8 +574,8 @@ function every(ms, fn) { fn(); const id = setInterval(fn, ms); onCleanup(() => c
 function onBus(ev, fn) { bus.addEventListener(ev, fn); onCleanup(() => bus.removeEventListener(ev, fn)); }
 
 function renderPage() {
-  const id = (location.hash.replace('#/', '') || 'overview');
-  const page = pages[id] ? id : 'overview';
+  const id = (location.hash.replace('#/', '') || 'dashboard');
+  const page = pages[id] ? id : 'dashboard';
   for (const fn of current.cleanup) { try { fn(); } catch {} }
   current = { id: page, cleanup: [] };
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
@@ -928,6 +974,336 @@ pages.processes = {
       $('p-count').textContent = `${d.all} processes`;
       renderRows();
     }).catch(() => {}); });
+  },
+};
+
+/* ---------- customizable dashboard ---------- */
+const DASH_KEY = 'pulseDash-v1';
+const DASH_DEFAULT = [
+  { w: 'stat-cpu', size: 3 }, { w: 'stat-gpu', size: 3 }, { w: 'stat-mem', size: 3 }, { w: 'stat-health', size: 3 },
+  { w: 'chart-system', size: 12 },
+  { w: 'chart-gputemp', size: 6 }, { w: 'top-procs', size: 6 },
+];
+let dashEditing = false;
+function dashLoad() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DASH_KEY));
+    if (Array.isArray(d) && d.length) return d;
+  } catch {}
+  return DASH_DEFAULT.map(x => ({ ...x }));
+}
+function dashSave(cfg) { localStorage.setItem(DASH_KEY, JSON.stringify(cfg)); }
+function dashPin(sensorId, label) {
+  const cfg = dashLoad();
+  cfg.push({ w: 'sensor-stat', size: 3, sensor: sensorId, label });
+  dashSave(cfg);
+  showToast(`<b>${esc(label)}</b> pinned to the Dashboard.`);
+}
+
+const fmtSensor = (v, unit) => {
+  if (v == null) return '—';
+  if (unit === '°C') return v.toFixed(0) + '°C';
+  if (unit === 'RPM') return v.toFixed(0) + ' RPM';
+  if (unit === 'V') return v.toFixed(2) + ' V';
+  if (unit === 'W') return v.toFixed(1) + ' W';
+  if (unit === '%') return v.toFixed(0) + '%';
+  return v.toFixed(1) + (unit ? ' ' + unit : '');
+};
+
+function statParts(el) {
+  el.innerHTML = '<div class="stat"><div class="val">–</div><div class="sub"></div></div>';
+  return { val: el.querySelector('.val'), sub: el.querySelector('.sub') };
+}
+function chartParts(el, height) {
+  el.innerHTML = `<div class="legend" style="margin-bottom:8px"></div><div class="chart" style="height:${height}px"></div>`;
+  return { legend: el.querySelector('.legend'), chart: el.querySelector('.chart') };
+}
+
+const WIDGETS = {
+  'stat-cpu': { name: 'CPU load (tile)', title: () => 'CPU load', mount(el) {
+    const s = statParts(el);
+    onBus('fast', e => { tween(s.val, e.detail.cpu.avg, v => v.toFixed(0) + '%'); s.sub.textContent = e.detail.temp ? e.detail.temp.toFixed(0) + '°C' : e.detail.cpu.cores.length + ' threads'; });
+  }},
+  'stat-gpu': { name: 'GPU load (tile)', title: () => 'GPU load', mount(el) {
+    const s = statParts(el);
+    onBus('gpu', e => { tween(s.val, e.detail['utilization.gpu'], v => v.toFixed(0) + '%'); s.sub.textContent = `${e.detail['temperature.gpu']}°C · fan ${dash(e.detail['fan.speed'])}%`; });
+  }},
+  'stat-gputemp': { name: 'GPU temp (tile)', title: () => 'GPU temp', mount(el) {
+    const s = statParts(el);
+    onBus('gpu', e => { tween(s.val, e.detail['temperature.gpu'], v => v.toFixed(0) + '°C'); s.sub.textContent = e.detail['power.draw'] != null ? e.detail['power.draw'].toFixed(0) + ' W' : ''; });
+  }},
+  'stat-mem': { name: 'Memory (tile)', title: () => 'Memory', mount(el) {
+    const s = statParts(el);
+    onBus('fast', e => { tween(s.val, e.detail.mem.used / 1e9, v => v.toFixed(1) + ' GB'); s.sub.textContent = (e.detail.mem.used / e.detail.mem.total * 100).toFixed(0) + '% of ' + (e.detail.mem.total / 1e9).toFixed(0) + ' GB'; });
+  }},
+  'stat-net': { name: 'Network (tile)', title: () => 'Network', mount(el) {
+    const s = statParts(el);
+    onBus('fast', e => { s.val.innerHTML = `<span style="color:var(--down)">↓</span> ${fmtRate(e.detail.net.rx)}`; s.sub.textContent = '↑ ' + fmtRate(e.detail.net.tx); });
+  }},
+  'stat-health': { name: 'Health score (tile)', title: () => 'Health', mount(el) {
+    const s = statParts(el);
+    const upd = h => { if (!h) return; const c = h.score >= 90 ? 'var(--good)' : h.score >= 70 ? 'var(--warn)' : 'var(--crit)'; s.val.textContent = h.score; s.val.style.color = c; s.sub.textContent = h.checks.filter(x => x.status !== 'pass').length + ' item(s) flagged'; };
+    upd(healthData);
+    onBus('health', e => upd(e.detail));
+  }},
+  'stat-uptime': { name: 'Uptime (tile)', title: () => 'Uptime', mount(el) {
+    const s = statParts(el);
+    onBus('fast', e => { s.val.textContent = fmtUp(e.detail.uptime); s.sub.textContent = live.staticInfo ? esc(live.staticInfo.os.hostname) : ''; });
+  }},
+  'chart-system': { name: 'System load chart (CPU+GPU+MEM)', title: () => 'System load — 30 min', mount(el) {
+    const p = chartParts(el, 200);
+    const chart = regChart(new TimeChart(p.chart, { series: [
+      { key: 'cpu', label: 'CPU', color: 'var(--cpu)' },
+      { key: 'gpuUtil', label: 'GPU', color: 'var(--gpu)' },
+      { key: 'mem', label: 'Memory', color: 'var(--mem)', fill: false },
+    ], yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: p.legend }));
+    histCols(['cpu', 'gpuUtil', 'mem']).then(c => chart.setData(c));
+    onBus('fast', e => chart.append({ t: Date.now(), cpu: e.detail.cpu.avg, mem: e.detail.mem.used / e.detail.mem.total * 100, gpuUtil: live.gpu ? live.gpu['utilization.gpu'] : null }));
+  }},
+  'chart-cpu': { name: 'CPU chart', title: () => 'CPU load — 30 min', mount(el) {
+    const p = chartParts(el, 170);
+    const chart = regChart(new TimeChart(p.chart, { series: [{ key: 'cpu', label: 'CPU', color: 'var(--cpu)' }], yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: p.legend }));
+    histCols(['cpu']).then(c => chart.setData(c));
+    onBus('fast', e => chart.append({ t: Date.now(), cpu: e.detail.cpu.avg }));
+  }},
+  'chart-gpu': { name: 'GPU + VRAM chart', title: () => 'GPU load & VRAM — 30 min', mount(el) {
+    const p = chartParts(el, 170);
+    const chart = regChart(new TimeChart(p.chart, { series: [
+      { key: 'gpuUtil', label: 'GPU', color: 'var(--gpu)' },
+      { key: 'gpuVram', label: 'VRAM', color: 'var(--vram)', fill: false },
+    ], yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: p.legend }));
+    histCols(['gpuUtil', 'gpuVram']).then(c => chart.setData(c));
+    onBus('fast', () => { const g = live.gpu; chart.append({ t: Date.now(), gpuUtil: g ? g['utilization.gpu'] : null, gpuVram: g && g['memory.total'] ? g['memory.used'] / g['memory.total'] * 100 : null }); });
+  }},
+  'chart-gputemp': { name: 'GPU temp chart', title: () => 'GPU temperature — 30 min', mount(el) {
+    const p = chartParts(el, 170);
+    const chart = regChart(new TimeChart(p.chart, { series: [{ key: 'gpuTemp', label: 'Temp', color: 'var(--gpu)' }], yMax: 105, yFmt: v => v.toFixed(0) + '°C', legendEl: p.legend,
+      bands: [{ from: 83, to: 90, color: 'var(--warn)' }, { from: 90, to: 105, color: 'var(--crit)' }] }));
+    histCols(['gpuTemp']).then(c => chart.setData(c));
+    onBus('fast', () => chart.append({ t: Date.now(), gpuTemp: live.gpu ? live.gpu['temperature.gpu'] : null }));
+  }},
+  'chart-mem': { name: 'Memory chart', title: () => 'Memory — 30 min', mount(el) {
+    const p = chartParts(el, 170);
+    const chart = regChart(new TimeChart(p.chart, { series: [{ key: 'mem', label: 'Used', color: 'var(--mem)' }], yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: p.legend }));
+    histCols(['mem']).then(c => chart.setData(c));
+    onBus('fast', e => chart.append({ t: Date.now(), mem: e.detail.mem.used / e.detail.mem.total * 100 }));
+  }},
+  'chart-net': { name: 'Network chart', title: () => 'Network — 30 min', mount(el) {
+    const p = chartParts(el, 170);
+    const chart = regChart(new TimeChart(p.chart, { series: [
+      { key: 'rx', label: 'Down', color: 'var(--down)' },
+      { key: 'tx', label: 'Up', color: 'var(--up)', fill: false },
+    ], yFmt: fmtRate, legendEl: p.legend }));
+    histCols(['rx', 'tx']).then(c => chart.setData(c));
+    onBus('fast', e => chart.append({ t: Date.now(), rx: e.detail.net.rx, tx: e.detail.net.tx }));
+  }},
+  'cores': { name: 'Per-core load grid', title: () => 'Per-core load', mount(el) {
+    el.innerHTML = '<div class="core-grid"></div>';
+    const grid = el.querySelector('.core-grid');
+    let cells = [];
+    onBus('fast', e => {
+      const cores = e.detail.cpu.cores;
+      if (cells.length !== cores.length) {
+        grid.innerHTML = cores.map((c, i) => `<div class="core-cell">C${i}<div class="mini-track"><div class="mini-fill"></div></div></div>`).join('');
+        cells = [...grid.querySelectorAll('.mini-fill')];
+      }
+      cores.forEach((c, i) => { cells[i].style.width = Math.min(100, c) + '%'; });
+    });
+  }},
+  'top-procs': { name: 'Top processes', title: () => 'Top processes', mount(el) {
+    el.innerHTML = '<table><tbody></tbody></table>';
+    const body = el.querySelector('tbody');
+    every(4000, () => fetch('/api/processes').then(r => r.json()).then(d => {
+      body.innerHTML = d.list.slice(0, 7).map(p =>
+        `<tr><td><b>${esc(p.name)}</b><span class="pid">${p.pid}</span></td><td class="num">${p.cpu.toFixed(1)}%</td><td class="num">${fmtBytes(p.memRss)}</td></tr>`).join('');
+    }).catch(() => {}));
+  }},
+  'storage': { name: 'Storage bars', title: () => 'Storage', mount(el) {
+    const render = disks => {
+      if (!disks) return;
+      el.innerHTML = disks.map(d => {
+        const pct = d.used / d.size * 100;
+        const color = pct > 95 ? 'var(--crit)' : pct > 85 ? 'var(--warn)' : 'var(--cpu)';
+        return `<div class="vol"><div class="row"><b>${esc(d.mount)}</b><span class="free">${fmtBytes(d.size - d.used)} free</span></div><div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div></div>`;
+      }).join('');
+    };
+    render(live.disks);
+    onBus('disks', e => render(e.detail));
+  }},
+  'checks': { name: 'Health checks list', title: () => 'Health checks', mount(el) {
+    const icon = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
+    const render = h => {
+      if (!h) return;
+      el.innerHTML = '<ul class="checks">' + h.checks.map(c =>
+        `<li><span class="icon ${icon[c.status][1]}">${icon[c.status][0]}</span><span class="name" style="min-width:0">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`).join('') + '</ul>';
+    };
+    render(healthData);
+    onBus('health', e => render(e.detail));
+  }},
+  'sensor-stat': { name: 'Sensor (tile)…', sensor: true, title: cfg => cfg.label || 'Sensor', mount(el, cfg) {
+    const s = statParts(el);
+    const upd = d => {
+      if (!d.available) { s.val.textContent = '—'; s.sub.textContent = 'sensor source offline'; return; }
+      const x = d.sensors.find(v => v.id === cfg.sensor);
+      if (x && x.value != null) { tween(s.val, x.value, v => fmtSensor(v, x.unit)); s.sub.textContent = x.hw; }
+    };
+    if (live.sensors) upd(live.sensors);
+    onBus('sensors', e => upd(e.detail));
+  }},
+  'sensor-chart': { name: 'Sensor (chart)…', sensor: true, title: cfg => (cfg.label || 'Sensor') + ' — 30 min', mount(el, cfg) {
+    const p = chartParts(el, 170);
+    let unit = '';
+    const chart = regChart(new TimeChart(p.chart, { series: [{ key: 'v', label: cfg.label || 'value', color: 'var(--cpu)' }], yFmt: v => fmtSensor(v, unit), legendEl: p.legend }));
+    fetch('/api/sensorhistory?id=' + encodeURIComponent(cfg.sensor)).then(r => r.json()).then(h => chart.setData(h));
+    onBus('sensors', e => {
+      if (!e.detail.available) return;
+      const x = e.detail.sensors.find(v => v.id === cfg.sensor);
+      if (x && x.value != null) { unit = x.unit; chart.append({ t: Date.now(), v: x.value }); }
+    });
+  }},
+};
+
+pages.dashboard = {
+  html: () => {
+    const cfg = dashLoad();
+    const bar = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span class="note">${dashEditing ? 'Editing — move ◀▶, resize ⬍, remove ✕, or add widgets below.' : ''}</span>
+      <button class="hud-btn${dashEditing ? '' : ' ghost'}" id="dash-edit">${dashEditing ? '✓ Done' : '✎ Customize'}</button></div>`;
+    const addbar = !dashEditing ? '' : `<div class="panel" style="margin-bottom:14px"><h2>Add widget</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+        <select id="add-type">${Object.entries(WIDGETS).map(([k, w]) => `<option value="${k}">${esc(w.name)}</option>`).join('')}</select>
+        <select id="add-sensor" style="display:none"><option>loading sensors…</option></select>
+        <button class="hud-btn" id="add-go">+ Add</button>
+        <button class="hud-btn ghost" id="dash-reset">Reset layout</button>
+      </div></div>`;
+    const grid = `<div class="grid">` + cfg.map((c, i) => {
+      const w = WIDGETS[c.w];
+      if (!w) return '';
+      const ctl = !dashEditing ? '' : `<span class="wctl">
+        <button data-i="${i}" data-act="left" title="Move left">◀</button>
+        <button data-i="${i}" data-act="size" title="Resize">⬍</button>
+        <button data-i="${i}" data-act="right" title="Move right">▶</button>
+        <button data-i="${i}" data-act="x" class="x" title="Remove">✕</button></span>`;
+      return `<div class="panel span${c.size}"><h2>${esc(w.title(c))}${ctl}</h2><div id="wg-${i}"></div></div>`;
+    }).join('') + `</div>`;
+    return bar + addbar + grid;
+  },
+  mount() {
+    const cfg = dashLoad();
+    cfg.forEach((c, i) => {
+      const w = WIDGETS[c.w], el = $('wg-' + i);
+      if (w && el) w.mount(el, c);
+    });
+    $('dash-edit').addEventListener('click', () => { dashEditing = !dashEditing; renderPage(); });
+    if (!dashEditing) return;
+
+    $('page').addEventListener('click', e => {
+      const b = e.target.closest('.wctl button');
+      if (!b) return;
+      const i = Number(b.dataset.i), c = dashLoad();
+      if (b.dataset.act === 'x') c.splice(i, 1);
+      if (b.dataset.act === 'size') c[i].size = c[i].size === 3 ? 6 : c[i].size === 6 ? 12 : 3;
+      if (b.dataset.act === 'left' && i > 0) [c[i - 1], c[i]] = [c[i], c[i - 1]];
+      if (b.dataset.act === 'right' && i < c.length - 1) [c[i + 1], c[i]] = [c[i], c[i + 1]];
+      dashSave(c);
+      renderPage();
+    });
+    $('dash-reset').addEventListener('click', () => { dashSave(DASH_DEFAULT.map(x => ({ ...x }))); renderPage(); });
+
+    const typeSel = $('add-type'), snSel = $('add-sensor');
+    const syncSensorSel = () => {
+      const isSensor = WIDGETS[typeSel.value] && WIDGETS[typeSel.value].sensor;
+      snSel.style.display = isSensor ? '' : 'none';
+      if (isSensor) fetch('/api/sensors').then(r => r.json()).then(d => {
+        if (!d.available) { snSel.innerHTML = '<option value="">no sensor source — see Sensors page</option>'; return; }
+        const groups = {};
+        for (const s of d.sensors) (groups[`${s.hw} · ${s.category}`] = groups[`${s.hw} · ${s.category}`] || []).push(s);
+        snSel.innerHTML = Object.entries(groups).map(([g, list]) =>
+          `<optgroup label="${esc(g)}">${list.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtSensor(s.value, s.unit)})</option>`).join('')}</optgroup>`).join('');
+      });
+    };
+    typeSel.addEventListener('change', syncSensorSel);
+    syncSensorSel();
+    $('add-go').addEventListener('click', () => {
+      const type = typeSel.value, w = WIDGETS[type];
+      const c = dashLoad();
+      if (w.sensor) {
+        if (!snSel.value) { showToast('Pick a sensor first — or set one up on the Sensors page.'); return; }
+        c.push({ w: type, size: type === 'sensor-chart' ? 6 : 3, sensor: snSel.value, label: snSel.selectedOptions[0].textContent.replace(/ \(.*\)$/, '') });
+      } else {
+        c.push({ w: type, size: type.startsWith('stat-') ? 3 : 6 });
+      }
+      dashSave(c);
+      renderPage();
+    });
+  },
+};
+
+/* ---------- sensors page ---------- */
+pages.sensors = {
+  html: () => `<div id="sn-root"><div class="note">Checking for a sensor source…</div></div>`,
+  mount() {
+    let built = false, lastIds = '';
+    const root = $('sn-root');
+    const render = d => {
+      if (!d) return;
+      if (!d.available) {
+        built = false; lastIds = '';
+        root.innerHTML = `<div class="panel" style="max-width:640px">
+          <h2>Unlock every sensor on this machine</h2>
+          <p class="note" style="font-size:12.5px;margin-bottom:4px">Windows doesn't expose CPU temperatures, fan RPMs, voltages or board temps
+          without a sensor driver. The free, open-source <b style="color:var(--ink)">LibreHardwareMonitor</b> provides one — run it and
+          this page (plus CPU temps everywhere in Pulse) lights up automatically.</p>
+          <ol class="guide-steps">
+            <li>Download LibreHardwareMonitor from the official <a href="https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest" target="_blank" rel="noopener">GitHub releases page</a> and unzip it.</li>
+            <li>Run <b style="color:var(--ink)">LibreHardwareMonitor.exe</b> (let it install its driver if asked).</li>
+            <li>In its menu bar turn on <b style="color:var(--ink)">Options → HTTP Server → Run</b> (keep the default port 8085).</li>
+            <li>Done — Pulse checks every few seconds and this page fills in on its own. Keep LHM running in the tray.</li>
+          </ol>
+          <p class="note">Pulse only reads LHM's local data feed on this PC — nothing leaves your machine.</p>
+        </div>`;
+        return;
+      }
+      const ids = d.sensors.map(s => s.id).join(',');
+      if (!built || ids !== lastIds) {
+        built = true; lastIds = ids;
+        const groups = new Map();
+        for (const s of d.sensors) {
+          const key = s.hw + '¦' + s.category;
+          if (!groups.has(key)) groups.set(key, []);
+          groups.get(key).push(s);
+        }
+        let html = `<div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
+          <input id="sn-search" type="search" placeholder="Filter sensors…">
+          <span class="note">${d.sensors.length} sensors · hover a tile to pin it to your Dashboard</span></div>`;
+        let currentHw = '';
+        for (const [key, list] of groups) {
+          const [hw, cat] = key.split('¦');
+          if (hw !== currentHw) { currentHw = hw; html += `<div class="panel" style="margin-bottom:4px;padding:9px 16px"><h2 style="margin:0">${esc(hw)}</h2></div>`; }
+          html += `<div class="sn-cat note" style="margin-top:10px">${esc(cat)}</div><div class="sn-grid">` +
+            list.map(s => `<div class="sn-tile" data-name="${esc((s.hw + ' ' + s.name).toLowerCase())}">
+              <div class="sn-name" title="${esc(s.name)}">${esc(s.name)}</div>
+              <b data-sid="${esc(s.id)}">${fmtSensor(s.value, s.unit)}</b>
+              <button class="pin" data-id="${esc(s.id)}" data-label="${esc(s.name)}">+ pin</button></div>`).join('') + `</div>`;
+        }
+        root.innerHTML = html;
+        $('sn-search').addEventListener('input', () => {
+          const q = $('sn-search').value.toLowerCase();
+          root.querySelectorAll('.sn-tile').forEach(t => { t.style.display = !q || t.dataset.name.includes(q) ? '' : 'none'; });
+        });
+        root.addEventListener('click', e => {
+          const b = e.target.closest('.pin');
+          if (b) dashPin(b.dataset.id, b.dataset.label);
+        });
+      } else {
+        for (const s of d.sensors) {
+          const el = root.querySelector(`[data-sid="${CSS.escape(s.id)}"]`);
+          if (el) el.textContent = fmtSensor(s.value, s.unit);
+        }
+      }
+    };
+    if (live.sensors) render(live.sensors); else fetch('/api/sensors').then(r => r.json()).then(render);
+    onBus('sensors', e => render(e.detail));
   },
 };
 

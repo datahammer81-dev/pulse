@@ -101,7 +101,7 @@ async function fastTick() {
       cpu: { avg: load.currentLoad, cores: load.cpus.map(c => c.load) },
       mem: { used: mem.active, total: mem.total, swapUsed: mem.swapused, swapTotal: mem.swaptotal },
       net: { rx: activeNet.rx, tx: activeNet.tx },
-      temp: temp.main,
+      temp: temp.main ?? lhmCpuTemp(),
       uptime: time.uptime,
     };
     pushHist({
@@ -168,6 +168,79 @@ async function procTick() {
   }
 }
 
+// ---------- LibreHardwareMonitor bridge (optional deep sensors) ----------
+// If LHM is running with its HTTP server enabled (default port 8085), Pulse
+// picks up CPU temps, fan RPMs, voltages, power and board temps automatically.
+const LHM_URL = 'http://127.0.0.1:8085/data.json';
+let lhm = { available: false, sensors: [], at: 0 };
+const sensorHist = new Map(); // id → {t[], v[]}
+const SENSOR_HIST_LEN = 360;  // 30 min of 5s samples
+
+function parseLhmValue(s) {
+  if (typeof s !== 'string') return null;
+  const m = s.replace(/,/g, '.').match(/-?\d+(\.\d+)?/);
+  return m ? parseFloat(m[0]) : null;
+}
+
+function flattenLhm(node, path, out) {
+  if (node.Children && node.Children.length) {
+    for (const c of node.Children) flattenLhm(c, path.concat(node.Text), out);
+  } else if (node.Value !== undefined && node.Value !== '') {
+    // path: [root, machine, hardware, (subchip…), category]
+    out.push({
+      id: path.slice(2).concat(node.Text).join('|'),
+      hw: path[2] || '',
+      category: path[path.length - 1] || '',
+      name: node.Text,
+      value: parseLhmValue(node.Value),
+      unit: (String(node.Value).match(/[^\d.,\s-][^\d]*$/) || [''])[0].trim(),
+    });
+  }
+}
+
+function lhmCpuTemp() {
+  if (!lhm.available) return null;
+  const pick = lhm.sensors.find(s => s.category === 'Temperatures' && /^(CPU Package|Core \(Tctl|CPU Core$)/.test(s.name))
+    || lhm.sensors.find(s => s.category === 'Temperatures' && /cpu/i.test(s.hw));
+  return pick && pick.value != null ? pick.value : null;
+}
+
+async function lhmTick() {
+  try {
+    const res = await fetch(LHM_URL, { signal: AbortSignal.timeout(2500) });
+    const tree = await res.json();
+    const out = [];
+    flattenLhm(tree, [], out);
+    const now = Date.now();
+    lhm = { available: true, sensors: out, at: now };
+    for (const s of out) {
+      if (s.value == null) continue;
+      let h = sensorHist.get(s.id);
+      if (!h) { h = { t: [], v: [] }; sensorHist.set(s.id, h); }
+      h.t.push(now); h.v.push(s.value);
+      if (h.t.length > SENSOR_HIST_LEN) { h.t.shift(); h.v.shift(); }
+    }
+    broadcast('sensors', { available: true, sensors: out });
+  } catch {
+    if (lhm.available) broadcast('sensors', { available: false, sensors: [] });
+    lhm = { available: false, sensors: [], at: Date.now() };
+  }
+}
+
+// Poll every 5s while LHM answers; retry every 15s while it doesn't.
+let lastLhmAttempt = 0;
+setInterval(() => {
+  const wait = lhm.available ? 5000 : 15000;
+  if (Date.now() - lastLhmAttempt >= wait) { lastLhmAttempt = Date.now(); lhmTick(); }
+}, 2500);
+lhmTick();
+
+app.get('/api/sensors', (req, res) => res.json(lhm));
+app.get('/api/sensorhistory', (req, res) => {
+  const h = sensorHist.get(String(req.query.id || ''));
+  res.json(h ? { t: h.t, v: h.v } : { t: [], v: [] });
+});
+
 setInterval(fastTick, TICK_MS);
 setInterval(gpuTick, 3000);
 setInterval(diskTick, 30000);
@@ -194,6 +267,7 @@ app.get('/api/live', (req, res) => {
   if (latest.fast) send('fast', latest.fast);
   if (latest.gpu) send('gpu', latest.gpu);
   if (latest.disks) send('disks', latest.disks);
+  send('sensors', { available: lhm.available, sensors: lhm.sensors });
 
   const drop = () => { closed = true; sseClients.delete(send); };
   req.on('close', drop);
@@ -264,7 +338,8 @@ app.get('/api/detail/cpu', async (req, res) => {
       loadAvg: load.currentLoad, loadUser: load.currentLoadUser, loadSystem: load.currentLoadSystem,
       coreLoads: load.cpus.map(c => c.load),
       coreClocks,
-      tempC: temp.main,
+      tempC: temp.main ?? lhmCpuTemp(),
+      tempSource: temp.main != null ? 'windows' : (lhmCpuTemp() != null ? 'lhm' : null),
       elevated,
     });
   } catch (err) {
@@ -471,6 +546,12 @@ app.get('/api/health', async (req, res) => {
     if (g && g['temperature.gpu'] != null) {
       const t = g['temperature.gpu'];
       add('GPU temperature', t > 90 ? 'fail' : t > 82 ? 'warn' : 'pass', `${g.name} at ${t}°C`);
+    }
+
+    // CPU temperature (only when a sensor source exposes it)
+    const cpuT = lhmCpuTemp();
+    if (cpuT != null) {
+      add('CPU temperature', cpuT > 95 ? 'fail' : cpuT > 85 ? 'warn' : 'pass', `CPU package at ${cpuT.toFixed(0)}°C`);
     }
 
     if (battery.hasBattery) {
