@@ -4,9 +4,13 @@
 
 ### [⬇ Download Pulse for Windows — Pulse-Setup.exe](https://github.com/datahammer81-dev/pulse/releases/latest/download/Pulse-Setup.exe)
 
-One-click installer, ~95 MB. Everything the app needs is inside — no Node.js, no
-runtimes, nothing else to install. SmartScreen may prompt once (unsigned):
-*More info → Run anyway*.
+One-click installer, ~95 MB. Run the downloaded file — that's the whole install.
+Everything the app needs is inside — no Node.js, no runtimes, nothing else to
+install. SmartScreen may prompt once (unsigned): *More info → Run anyway*.
+
+> ⚠️ **Don't use the green "Code → Download ZIP" button** — that downloads the
+> source code for developers, not the app. Use the download link above (or the
+> [Releases](../../releases) page) to get the installable app.
 
 Everything about your PC on one page — live CPU/GPU/memory/network/disk stats,
 a 0–100 health score, and a process manager. Click any card for a deep-dive
