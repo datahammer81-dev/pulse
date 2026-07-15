@@ -1,7 +1,7 @@
 {
   "name": "pulse",
   "productName": "Pulse",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Pulse — live PC health dashboard and task manager for Windows. Streams CPU/memory/network/disk stats, runs health checks, and can end processes.",
   "author": "Trevor",
   "main": "electron-main.js",
@@ -43,7 +43,8 @@
       "icon": "dist/pulse.ico"
     },
     "nsis": {
-      "oneClick": true,
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "runAfterFinish": true,
       "artifactName": "Pulse-Setup-${version}.${ext}"
