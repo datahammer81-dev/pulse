@@ -10,9 +10,13 @@ let sea = null;
 try { sea = require('node:sea'); } catch {}
 const isExe = !!(sea && sea.isSea && sea.isSea());
 
-// Errors must never vanish with the console window — log next to the exe and keep serving.
+// Errors must never vanish with the console window — log somewhere writable and keep serving.
+// SEA exe: next to the exe. Electron (app folder may be read-only): %LOCALAPPDATA%\Pulse. Dev: project root.
 const fs = require('fs');
-const LOG = path.join(isExe ? path.dirname(process.execPath) : __dirname, 'pulse.log');
+const LOG_DIR = isExe ? path.dirname(process.execPath)
+  : (process.versions.electron && process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Pulse') : __dirname);
+try { fs.mkdirSync(LOG_DIR, { recursive: true }); } catch {}
+const LOG = path.join(LOG_DIR, 'pulse.log');
 const logErr = (tag, err) => {
   try { fs.appendFileSync(LOG, `[${new Date().toISOString()}] ${tag}: ${(err && err.stack) || err}\n`); } catch {}
 };

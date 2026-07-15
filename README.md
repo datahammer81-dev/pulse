@@ -42,12 +42,15 @@ drive SMART data, and more.
 
 Grab the latest from the [Releases](../../releases) page:
 
-- **`Pulse-win32-x64.zip`** — the desktop app. Unzip anywhere, run `Pulse.exe`.
-  Own window, own taskbar icon; close the window to stop it.
+- **`Pulse-Setup-x.y.z.exe`** ← recommended. One-click installer: installs the
+  desktop app, creates Desktop + Start Menu shortcuts, registers an uninstaller
+  in Windows Apps, and launches when done.
+- **`Pulse-win32-x64.zip`** — the same desktop app without an installer. Unzip
+  anywhere, run `Pulse.exe`.
 - **`Pulse.exe`** (portable) — single file. Run it and the dashboard opens in
   your default browser; close its console window to stop it.
 
-Both are unsigned, so Windows SmartScreen may prompt once — "More info → Run anyway".
+All are unsigned, so Windows SmartScreen may prompt once — "More info → Run anyway".
 
 ### Option B — build from source
 
@@ -60,8 +63,9 @@ npm install
 
 npm start            # server only — open http://localhost:7377
 npm run app          # desktop app window (dev)
-npm run build:app    # package the desktop app → dist/app/Pulse-win32-x64/
-npm run build:exe    # portable single exe → dist/Pulse.exe
+npm run build:installer  # one-click installer → dist/installer/Pulse-Setup-x.y.z.exe
+npm run build:app        # unpacked desktop app → dist/app/Pulse-win32-x64/
+npm run build:exe        # portable single exe → dist/Pulse.exe
 ```
 
 **Tip:** run elevated (right-click → Run as administrator) to unlock drive
