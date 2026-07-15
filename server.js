@@ -235,6 +235,7 @@ app.get('/api/static', async (req, res) => {
       system: { manufacturer: system.manufacturer, model: system.model },
       disks: diskLayout.map(d => ({ name: d.name, size: d.size, type: d.type, interfaceType: d.interfaceType })),
       elevated,
+      version: require('./package.json').version,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -387,8 +388,32 @@ app.post('/api/kill', (req, res) => {
     process.kill(pid);
     res.json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const denied = err.code === 'EPERM';
+    res.status(denied ? 403 : 500).json({
+      error: denied
+        ? 'Windows blocked this — the process is protected or running with higher privileges.'
+        : err.message,
+      adminHint: denied && !elevated,
+    });
   }
+});
+
+// Relaunch Pulse elevated (triggers a UAC prompt). Only meaningful for packaged builds.
+app.post('/api/relaunch-elevated', (req, res) => {
+  if (elevated) return res.json({ ok: false, message: 'Already running as administrator.' });
+  const inDev = !isExe && !process.versions.electron;
+  if (inDev) return res.status(400).json({ error: 'Dev mode — restart your terminal as administrator instead.' });
+  res.json({ ok: true });
+  // Spawn detached so the elevated copy survives this instance quitting; the
+  // sleep lets this instance release the port before the new one binds it.
+  const { spawn } = require('child_process');
+  const exe = process.execPath.replace(/'/g, "''");
+  spawn('powershell.exe',
+    ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', `Start-Sleep -Milliseconds 1200; Start-Process -FilePath '${exe}' -Verb RunAs`],
+    { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+  setTimeout(() => {
+    try { require('electron').app.quit(); } catch { process.exit(0); }
+  }, 400);
 });
 
 // ---------- health checks (read-only PowerShell queries, cached) ----------
