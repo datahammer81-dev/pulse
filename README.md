@@ -61,9 +61,11 @@ drive SMART data, and more.
 Grab the latest from the [Releases](../../releases) page:
 
 - **[`Pulse-Setup.exe`](https://github.com/datahammer81-dev/pulse/releases/latest/download/Pulse-Setup.exe)**
-  ← recommended. One-click installer: installs the desktop app, creates
-  Desktop + Start Menu shortcuts, registers an uninstaller in Windows Apps, and
-  launches when done. Fully self-contained — no other software needed.
+  ← recommended. Installer wizard: pick the install folder, get Desktop +
+  Start Menu shortcuts and an uninstaller in Windows Apps. Fully self-contained —
+  no other software needed. If Pulse is already installed, it asks whether to
+  **update/reinstall** (keeping your settings) or **reinstall clean** (reset to
+  defaults).
 - **`Pulse-win32-x64.zip`** — the same desktop app without an installer. Unzip
   anywhere, run `Pulse.exe`.
 - **`Pulse.exe`** (portable) — single file. Run it and the dashboard opens in
