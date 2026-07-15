@@ -14,9 +14,15 @@ drive SMART data, and more.
 - **Health score** (0–100) computed from live checks: drive SMART status, free
   space per volume, memory pressure, Windows Defender state, pending reboot,
   uptime, GPU temperature, battery wear (laptops)
-- **Live dashboard** — 2-second updates over SSE: CPU (total + per-core bars),
+- **Gaming-HUD interface** — dark corner-cut panels, sidebar navigation, animated
+  live numbers, one page per subsystem
+- **30-minute history on every chart** — recorded server-side even while you're
+  not looking; hover any chart to scrub back through time
+- **Top-offenders chart** — the top CPU-hungry processes tracked over 30 minutes,
+  so you can see exactly which app spiked five minutes ago
+- **Live updates** — 2-second SSE stream: CPU (total + per-core bars),
   memory, GPU (utilization/VRAM/fan/power via nvidia-smi), network rates, storage
-- **Click-to-drill-down panels:**
+- **Per-subsystem pages:**
   - **CPU** — real per-core *effective* clocks (perf counters, shows actual turbo),
     cache, load split, virtualization
   - **GPU** — load, temp, fan %, power draw vs limit, core/memory clocks vs max,

@@ -7,17 +7,20 @@
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#x1F493;</text></svg>">
 <style>
   :root {
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --ink: #ffffff;
-    --ink-2: #c3c2b7;
-    --muted: #898781;
-    --grid: #2c2c2a;
-    --baseline: #383835;
-    --border: rgba(255,255,255,0.10);
+    --bg: #0a0a0c;
+    --panel: #141419;
+    --panel-2: #101014;
+    --border: #26262e;
+    --grid: #232329;
+    --baseline: #34343c;
+    --accent: #e8283f;          /* chrome/brand only — never a data series */
+    --ink: #f2f2f5;
+    --ink-2: #a9a9b3;
+    --muted: #6d6d78;
     --cpu: #3987e5;
     --mem: #9085e9;
     --gpu: #d55181;
+    --vram: #d95926;
     --down: #199e70;
     --up: #c98500;
     --good: #0ca30c;
@@ -25,706 +28,850 @@
     --crit: #d03b3b;
   }
   * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
   body {
-    background: var(--page);
+    background: var(--bg);
     color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px;
-    padding: 18px 20px 40px;
+    font-size: 13.5px;
+    overflow: hidden;
   }
-  header { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
-  header h1 { font-size: 22px; letter-spacing: 3px; font-weight: 700; }
-  header h1 .beat { color: var(--crit); }
-  #sysline { color: var(--muted); font-size: 12.5px; cursor: pointer; }
-  #sysline:hover { color: var(--ink-2); }
-  #sysline b { color: var(--ink-2); font-weight: 600; }
+  #shell { display: flex; height: 100vh; }
 
-  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
-  .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    min-width: 0;
+  /* ---------- nav rail ---------- */
+  #rail {
+    width: 198px; flex: none; display: flex; flex-direction: column;
+    background:
+      repeating-linear-gradient(-45deg, rgba(255,255,255,0.012) 0 2px, transparent 2px 6px),
+      var(--panel-2);
+    border-right: 1px solid var(--border);
   }
-  .card.clickable { cursor: pointer; transition: border-color .15s; }
-  .card.clickable:hover { border-color: var(--muted); }
-  .card h2 {
-    font-size: 11.5px; font-weight: 600; letter-spacing: 1.2px;
-    text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
-    display: flex; justify-content: space-between; align-items: baseline;
+  #logo { padding: 20px 18px 10px; }
+  #logo .word { font-size: 21px; font-weight: 800; letter-spacing: 5px; }
+  #logo .word i { color: var(--accent); font-style: normal; }
+  #ekg { display: block; margin-top: 6px; }
+  #ekg polyline {
+    fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round;
+    stroke-dasharray: 130 190; animation: ekg 2.6s linear infinite;
+    filter: drop-shadow(0 0 3px rgba(232,40,63,.7));
   }
-  .card h2 .more { text-transform: none; letter-spacing: 0; font-weight: 400; opacity: 0; transition: opacity .15s; }
-  .card.clickable:hover h2 .more { opacity: 1; }
-  .span3 { grid-column: span 3; } .span4 { grid-column: span 4; }
-  .span5 { grid-column: span 5; } .span7 { grid-column: span 7; }
-  .span12 { grid-column: span 12; }
-  @media (max-width: 1100px) { .span3, .span4 { grid-column: span 6; } .span5, .span7 { grid-column: span 12; } }
-  @media (max-width: 640px)  { .span3, .span4 { grid-column: span 12; } }
+  @keyframes ekg { from { stroke-dashoffset: 320; } to { stroke-dashoffset: 0; } }
 
-  .big { font-size: 30px; font-weight: 700; line-height: 1.1; }
-  .big small { font-size: 14px; font-weight: 400; color: var(--muted); }
-  .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-
-  .spark { position: relative; height: 72px; margin-top: 10px; cursor: crosshair; }
-  .spark svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
-
-  .legend { display: flex; gap: 14px; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
-  .legend .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; }
-
-  #cores { display: flex; gap: 2px; height: 34px; align-items: flex-end; margin-top: 12px; }
-  #cores div { flex: 1; background: var(--cpu); border-radius: 2px 2px 0 0; min-height: 2px; transition: height .4s; }
-
-  /* health ring */
-  .ring-wrap { display: flex; align-items: center; gap: 16px; }
-  .ring { position: relative; width: 118px; height: 118px; flex: none; }
-  .ring svg { transform: rotate(-90deg); }
-  .ring .val { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  .ring .val b { font-size: 28px; }
-  .ring .val span { font-size: 10.5px; color: var(--muted); letter-spacing: 1px; }
-
-  .checks { list-style: none; columns: 2; column-gap: 30px; }
-  .checks li { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--grid); align-items: baseline; break-inside: avoid; }
-  .checks .icon { font-size: 12px; width: 16px; flex: none; text-align: center; font-weight: 700; }
-  .checks .name { color: var(--ink); font-weight: 600; min-width: 165px; }
-  .checks .detail { color: var(--ink-2); font-size: 13px; }
-  @media (max-width: 900px) { .checks { columns: 1; } }
-
-  /* disk bars */
-  .disk { margin-bottom: 14px; }
-  .disk:last-child { margin-bottom: 0; }
-  .disk .row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px; }
-  .disk .row .free { color: var(--ink-2); }
-  .disk .track { height: 10px; background: var(--grid); border-radius: 4px; overflow: hidden; }
-  .disk .fill { height: 100%; background: var(--cpu); border-radius: 4px; transition: width .6s; }
-
-  /* processes */
-  .proc-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
-  .proc-head h2 { margin-bottom: 0; }
-  .proc-head input {
-    background: var(--page); color: var(--ink); border: 1px solid var(--baseline);
-    border-radius: 6px; padding: 6px 10px; font-size: 13px; width: 220px; outline: none;
+  #nav { margin-top: 14px; flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 11px;
+    padding: 10px 18px; cursor: pointer; color: var(--ink-2);
+    font-size: 11.5px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase;
+    border-left: 3px solid transparent; transition: color .15s, background .15s, border-color .15s;
+    user-select: none;
   }
-  .proc-head input:focus { border-color: var(--muted); }
-  .proc-head .count { color: var(--muted); font-size: 12.5px; margin-left: auto; }
+  .nav-item .glyph { width: 17px; text-align: center; font-size: 13px; opacity: .8; }
+  .nav-item:hover { color: var(--ink); background: rgba(255,255,255,0.03); }
+  .nav-item.active {
+    color: var(--ink); border-left-color: var(--accent);
+    background: linear-gradient(90deg, rgba(232,40,63,0.12), transparent 70%);
+  }
+  #rail-foot { padding: 14px 18px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); line-height: 1.7; }
+  #rail-foot b { color: var(--ink-2); font-weight: 600; }
+
+  /* ---------- main column ---------- */
+  #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #topbar {
+    display: flex; align-items: center; gap: 18px;
+    padding: 14px 22px; border-bottom: 1px solid var(--border);
+    background:
+      repeating-linear-gradient(-45deg, rgba(255,255,255,0.012) 0 2px, transparent 2px 6px),
+      var(--panel-2);
+  }
+  #page-title { font-size: 17px; font-weight: 800; letter-spacing: 3px; text-transform: uppercase; }
+  #page-title::before { content: "// "; color: var(--accent); font-weight: 800; }
+  #topbar .spacer { flex: 1; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 4px 12px; border: 1px solid var(--border); border-radius: 3px;
+    font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums;
+    background: var(--panel);
+  }
+  .chip b { color: var(--ink); font-weight: 700; }
+  #live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--crit); flex: none; }
+  #live-dot.on { background: var(--good); animation: pulse 2s ease-out infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(12,163,12,.55); } 70% { box-shadow: 0 0 0 7px rgba(12,163,12,0); } 100% { box-shadow: 0 0 0 0 rgba(12,163,12,0); } }
+
+  #page { flex: 1; overflow-y: auto; padding: 18px 22px 26px; }
+  .page-enter { animation: rise .22s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: none; } }
+
+  /* ---------- panels ---------- */
+  .grid { display: grid; gap: 14px; }
+  .panel {
+    position: relative; background: var(--panel); border: 1px solid var(--border);
+    padding: 14px 16px; min-width: 0;
+    clip-path: polygon(0 0, calc(100% - 13px) 0, 100% 13px, 100% 100%, 13px 100%, 0 calc(100% - 13px));
+  }
+  .panel::before {
+    content: ""; position: absolute; top: 0; left: 0; width: 34px; height: 2px; background: var(--accent);
+  }
+  .panel h2 {
+    font-size: 10.5px; font-weight: 700; letter-spacing: 2.2px; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .panel h2 .aside { letter-spacing: .5px; font-weight: 400; text-transform: none; color: var(--muted); }
+
+  /* stat blocks */
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
+  .stat-row.c3 { grid-template-columns: repeat(3, 1fr); }
+  .stat { position: relative; }
+  .stat .val { font-size: 33px; font-weight: 800; line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -.5px; }
+  .stat .val small { font-size: 14px; font-weight: 600; color: var(--muted); letter-spacing: 0; }
+  .stat .sub { color: var(--muted); font-size: 11.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+  /* charts */
+  .chart { position: relative; cursor: crosshair; }
+  .chart svg { display: block; width: 100%; height: 100%; overflow: visible; }
+  .legend { display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-2); flex-wrap: wrap; }
+  .legend .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  .legend .lv { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; margin-left: 5px; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 40; display: none;
+    background: #0c0c0f; border: 1px solid var(--baseline); padding: 8px 11px;
+    font-size: 11.5px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums;
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+  }
+  #tooltip .tt-time { color: var(--muted); font-size: 10.5px; letter-spacing: 1px; margin-bottom: 4px; }
+  #tooltip .tt-row { display: flex; align-items: center; gap: 7px; padding: 1px 0; }
+  #tooltip .tt-row b { color: var(--ink); margin-left: auto; padding-left: 14px; }
+  #tooltip .dot { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+
+  /* bars & tables */
+  .track { height: 9px; background: var(--grid); overflow: hidden; }
+  .track .fill { height: 100%; background: var(--cpu); transition: width .6s ease; }
+  .vol { margin-bottom: 12px; }
+  .vol:last-child { margin-bottom: 0; }
+  .vol .row { display: flex; justify-content: space-between; font-size: 12.5px; margin-bottom: 5px; font-variant-numeric: tabular-nums; }
+  .vol .row .free { color: var(--ink-2); }
+
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: 6px 10px; font-size: 13px; }
-  th {
-    color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-    border-bottom: 1px solid var(--baseline); user-select: none;
-  }
-  th.sortable { cursor: pointer; } th.sortable:hover { color: var(--ink-2); }
+  th, td { text-align: left; padding: 6px 10px; font-size: 12.5px; }
+  th { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1.6px; border-bottom: 1px solid var(--baseline); user-select: none; }
+  th.sortable { cursor: pointer; } th.sortable:hover { color: var(--ink); }
   th.num, td.num { text-align: right; }
   tbody tr { border-bottom: 1px solid var(--grid); }
-  tbody tr:hover { background: rgba(255,255,255,0.04); }
-  td .pid { color: var(--muted); font-size: 11.5px; }
-  .bar-cell { width: 130px; }
-  .mini-track { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; }
-  .mini-fill { height: 100%; border-radius: 3px; background: var(--cpu); }
+  tbody tr:hover { background: rgba(255,255,255,0.035); }
+  td .pid { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .mini-track { height: 5px; background: var(--grid); overflow: hidden; }
+  .mini-fill { height: 100%; background: var(--cpu); transition: width .4s; }
+  .bar-cell { width: 120px; }
+
   .kill {
     background: none; border: 1px solid var(--baseline); color: var(--muted);
-    border-radius: 5px; padding: 2px 9px; cursor: pointer; font-size: 12px;
+    padding: 2px 10px; cursor: pointer; font-size: 11.5px; letter-spacing: 1px;
+    clip-path: polygon(0 0, calc(100% - 6px) 0, 100% 6px, 100% 100%, 6px 100%, 0 calc(100% - 6px));
+    transition: color .15s, border-color .15s;
   }
   .kill:hover { border-color: var(--crit); color: var(--crit); }
   .kill.confirm { background: var(--crit); border-color: var(--crit); color: #fff; }
 
-  #tooltip {
-    position: fixed; pointer-events: none; background: var(--page); border: 1px solid var(--baseline);
-    border-radius: 6px; padding: 6px 9px; font-size: 12px; color: var(--ink-2);
-    display: none; z-index: 30; white-space: nowrap; font-variant-numeric: tabular-nums;
+  input[type=search] {
+    background: var(--panel-2); color: var(--ink); border: 1px solid var(--baseline);
+    padding: 6px 11px; font-size: 12.5px; width: 230px; outline: none;
+    clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
   }
-  #tooltip b { color: var(--ink); }
-  .status-good { color: var(--good); } .status-warn { color: var(--warn); } .status-crit { color: var(--crit); }
-  #conn { font-size: 12px; color: var(--muted); margin-left: auto; }
-  #conn.live::before { content: "●"; color: var(--good); margin-right: 5px; }
-  #conn.dead::before { content: "●"; color: var(--crit); margin-right: 5px; }
+  input[type=search]:focus { border-color: var(--muted); }
 
-  /* ---------- drill-down drawer ---------- */
-  #backdrop {
-    position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 18;
-    opacity: 0; pointer-events: none; transition: opacity .2s;
-  }
-  #drawer {
-    position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 94vw); z-index: 20;
-    background: var(--surface); border-left: 1px solid var(--border);
-    transform: translateX(102%); transition: transform .22s ease;
-    display: flex; flex-direction: column;
-  }
-  body.drawer-open #backdrop { opacity: 1; pointer-events: auto; }
-  body.drawer-open #drawer { transform: none; }
-  #drawer-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 16px 20px 12px; border-bottom: 1px solid var(--grid);
-  }
-  #drawer-title { font-size: 15px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
-  #drawer-close {
-    background: none; border: 1px solid var(--baseline); color: var(--muted);
-    border-radius: 6px; width: 28px; height: 28px; cursor: pointer; font-size: 14px;
-  }
-  #drawer-close:hover { color: var(--ink); border-color: var(--muted); }
-  #drawer-body { overflow-y: auto; padding: 14px 20px 30px; flex: 1; font-variant-numeric: tabular-nums; }
-
-  .hero-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 16px; }
-  .hero-grid.h3 { grid-template-columns: repeat(3, 1fr); }
-  .hero { background: var(--page); border-radius: 8px; padding: 10px 8px; text-align: center; }
-  .hero b { display: block; font-size: 19px; font-weight: 700; }
-  .hero b small { font-size: 11px; color: var(--muted); font-weight: 400; }
-  .hero span { display: block; font-size: 10px; color: var(--muted); letter-spacing: .8px; text-transform: uppercase; margin-top: 3px; }
-
-  .sect { font-size: 11px; font-weight: 600; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
-  .sect:first-child { margin-top: 0; }
-  .kv { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 13px; }
+  /* key-value spec rows */
+  .kv { display: flex; justify-content: space-between; gap: 14px; padding: 6px 0; border-bottom: 1px solid var(--grid); font-size: 12.5px; }
+  .kv:last-child { border-bottom: 0; }
   .kv .k { color: var(--muted); flex: none; }
-  .kv .v { color: var(--ink-2); text-align: right; overflow-wrap: anywhere; }
+  .kv .v { color: var(--ink-2); text-align: right; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
   .kv .v b { color: var(--ink); }
 
-  .track { height: 8px; background: var(--grid); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
-  .track .fill { height: 100%; border-radius: 4px; }
+  .core-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 7px; }
+  .core-cell { background: var(--panel-2); padding: 7px 8px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .core-cell b { display: block; color: var(--ink-2); font-size: 11.5px; font-weight: 700; }
+  .core-cell .mini-track { margin-top: 5px; }
 
-  .core-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
-  .core-cell { background: var(--page); border-radius: 6px; padding: 6px 8px; font-size: 11px; color: var(--muted); }
-  .core-cell b { display: block; color: var(--ink-2); font-size: 12px; font-weight: 600; }
-  .core-cell .mini-track { margin-top: 4px; }
+  .checks { list-style: none; }
+  .checks li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--grid); align-items: baseline; font-size: 12.5px; }
+  .checks li:last-child { border-bottom: 0; }
+  .checks .icon { width: 15px; flex: none; text-align: center; font-weight: 800; font-size: 11.5px; }
+  .checks .name { color: var(--ink); font-weight: 600; min-width: 150px; }
+  .checks .detail { color: var(--ink-2); }
+  .status-good { color: var(--good); } .status-warn { color: var(--warn); } .status-crit { color: var(--crit); }
 
-  .hint { font-size: 12px; color: var(--warn); margin: 10px 0; line-height: 1.5; }
-  .drawer-note { font-size: 12px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  .ring { position: relative; width: 104px; height: 104px; flex: none; }
+  .ring svg { transform: rotate(-90deg); }
+  .ring .val { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .ring .val b { font-size: 26px; font-weight: 800; }
+  .ring .val span { font-size: 9.5px; color: var(--muted); letter-spacing: 1.5px; }
+
+  .hint { font-size: 12px; color: var(--warn); line-height: 1.5; margin-bottom: 10px; }
+  .note { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+  @media (max-width: 1150px) {
+    .stat-row { grid-template-columns: repeat(2, 1fr); }
+    .core-grid { grid-template-columns: repeat(4, 1fr); }
+  }
 </style>
 </head>
 <body>
+<div id="shell">
+  <nav id="rail">
+    <div id="logo">
+      <div class="word">PULSE<i>_</i></div>
+      <svg id="ekg" width="160" height="26" viewBox="0 0 160 26">
+        <polyline points="0,16 38,16 48,16 56,5 64,22 72,16 96,16 104,12 112,16 160,16"/>
+      </svg>
+    </div>
+    <div id="nav"></div>
+    <div id="rail-foot">loading…</div>
+  </nav>
+  <div id="main">
+    <div id="topbar">
+      <div id="page-title">Overview</div>
+      <div class="spacer"></div>
+      <span class="chip" id="health-chip" style="cursor:pointer" title="Health score — see Overview">HEALTH <b>–</b></span>
+      <span class="chip" id="uptime-chip">UP <b>–</b></span>
+      <span class="chip"><span id="live-dot"></span><span id="live-label">offline</span></span>
+    </div>
+    <div id="page"></div>
+  </div>
+</div>
+<div id="tooltip"></div>
 
-<header>
-  <h1>PULSE <span class="beat">▄▂▆</span></h1>
-  <span id="sysline" title="Click for system details">connecting…</span>
-  <span id="conn" class="dead">offline</span>
-</header>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const dash = v => v == null || v === '' ? '—' : v;
+const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' KB';
+const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : (b / 1e3).toFixed(0) + ' KB/s';
+const fmtUp = s => { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return (d ? d + 'd ' : '') + h + 'h ' + m + 'm'; };
+const fmtClock = t => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-<div class="grid">
+/* ---------- animated number ---------- */
+function tween(el, val, fmt) {
+  if (el == null || val == null || !isFinite(val)) return;
+  if (el._tv === undefined) { el._tv = val; el.textContent = fmt(val); return; }
+  const from = el._tv, to = val, t0 = performance.now();
+  if (el._raf) cancelAnimationFrame(el._raf);
+  const step = now => {
+    const p = Math.min(1, (now - t0) / 320), e = 1 - Math.pow(1 - p, 3);
+    el._tv = from + (to - from) * e;
+    el.textContent = fmt(el._tv);
+    if (p < 1) el._raf = requestAnimationFrame(step);
+  };
+  el._raf = requestAnimationFrame(step);
+}
 
-  <div class="card span3">
-    <h2>System health</h2>
-    <div class="ring-wrap">
-      <div class="ring">
-        <svg width="118" height="118" viewBox="0 0 118 118">
-          <circle cx="59" cy="59" r="50" fill="none" stroke="var(--grid)" stroke-width="9"/>
-          <circle id="ring-arc" cx="59" cy="59" r="50" fill="none" stroke="var(--good)" stroke-width="9"
-                  stroke-linecap="round" stroke-dasharray="314 314" stroke-dashoffset="314"/>
-        </svg>
-        <div class="val"><b id="score">–</b><span>/ 100</span></div>
+/* ---------- tooltip ---------- */
+const tooltip = $('tooltip');
+function showTooltip(x, y, html) {
+  tooltip.innerHTML = html;
+  tooltip.style.display = 'block';
+  const r = tooltip.getBoundingClientRect();
+  tooltip.style.left = Math.min(x + 16, innerWidth - r.width - 10) + 'px';
+  tooltip.style.top = Math.max(8, y - r.height - 12) + 'px';
+}
+function hideTooltip() { tooltip.style.display = 'none'; }
+
+/* ---------- time chart: 30-min window, scrubbing, bands, gradient fills ---------- */
+class TimeChart {
+  // opts: { series: [{key,label,color,fill}], yMax, yFmt, spanMs, bands: [{from,to,color}], legendEl }
+  constructor(el, opts) {
+    this.el = el; this.o = Object.assign({ spanMs: 30 * 60000, yFmt: v => v.toFixed(0) }, opts);
+    this.d = { t: [] };
+    for (const s of this.o.series) this.d[s.key] = [];
+    this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.appendChild(this.svg);
+    this.hover = null;
+    el.addEventListener('mousemove', e => this.onMove(e));
+    el.addEventListener('mouseleave', () => { this.hover = null; hideTooltip(); this.render(); });
+    this.uid = 'g' + Math.random().toString(36).slice(2, 8);
+  }
+  setData(cols) {
+    this.d.t = (cols.t || []).slice();
+    for (const s of this.o.series) this.d[s.key] = (cols[s.key] || []).slice();
+    this.render();
+  }
+  append(point) {
+    this.d.t.push(point.t);
+    for (const s of this.o.series) this.d[s.key].push(point[s.key] ?? null);
+    const cutoff = Date.now() - this.o.spanMs - 10000;
+    while (this.d.t.length && this.d.t[0] < cutoff) {
+      this.d.t.shift();
+      for (const s of this.o.series) this.d[s.key].shift();
+    }
+    this.render();
+  }
+  yMax() {
+    if (this.o.yMax) return this.o.yMax;
+    let m = 1;
+    for (const s of this.o.series) for (const v of this.d[s.key]) if (v != null && v > m) m = v;
+    return m * 1.18;
+  }
+  render() {
+    const w = this.el.clientWidth, h = this.el.clientHeight;
+    if (!w || !h) return;
+    this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    const now = Date.now(), span = this.o.spanMs, max = this.yMax();
+    const padB = 17, plotH = h - padB;
+    const x = t => w - ((now - t) / span) * w;
+    const y = v => plotH - (v / max) * (plotH - 6);
+    let out = '<defs>';
+    for (const s of this.o.series) {
+      out += `<linearGradient id="${this.uid}-${s.key}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="${s.color}" stop-opacity="0.28"/>
+        <stop offset="1" stop-color="${s.color}" stop-opacity="0.02"/></linearGradient>`;
+    }
+    out += '</defs>';
+    // threshold bands
+    for (const b of this.o.bands || []) {
+      const top = y(Math.min(b.to ?? max, max)), bot = y(Math.max(b.from, 0));
+      if (bot > top) out += `<rect x="0" y="${top}" width="${w}" height="${bot - top}" fill="${b.color}" opacity="0.10"/>`;
+    }
+    // gridlines + y labels (fixed-max charts label the real scale; auto charts label the data peak)
+    const yBase = this.o.yMax ? max : max / 1.18;
+    for (const f of [0.5, 1]) {
+      const gy = y(yBase * f);
+      out += `<line x1="0" y1="${gy}" x2="${w}" y2="${gy}" stroke="var(--grid)" stroke-width="1"/>
+              <text x="4" y="${gy + 10}" font-size="9.5" fill="var(--muted)">${this.o.yFmt(yBase * f)}</text>`;
+    }
+    out += `<line x1="0" y1="${plotH}" x2="${w}" y2="${plotH}" stroke="var(--baseline)" stroke-width="1"/>`;
+    // x labels
+    for (const m of [30, 20, 10, 0]) {
+      const tx = x(now - m * 60000);
+      out += `<text x="${m === 0 ? tx - 26 : tx + 3}" y="${h - 4}" font-size="9.5" fill="var(--muted)">${m === 0 ? 'now' : '-' + m + 'm'}</text>`;
+      if (m) out += `<line x1="${tx}" y1="${plotH}" x2="${tx}" y2="${plotH - 4}" stroke="var(--baseline)" stroke-width="1"/>`;
+    }
+    // series (decimated, gaps on null)
+    const n = this.d.t.length;
+    const stride = Math.max(1, Math.floor(n / 340));
+    for (const s of this.o.series) {
+      const vals = this.d[s.key];
+      let segs = [], seg = [];
+      for (let i = 0; i < n; i += stride) {
+        // take the max inside the stride window so spikes survive decimation
+        let v = null;
+        for (let j = i; j < Math.min(i + stride, n); j++) if (vals[j] != null && (v == null || vals[j] > v)) v = vals[j];
+        if (v == null) { if (seg.length > 1) segs.push(seg); seg = []; continue; }
+        seg.push(`${x(this.d.t[i]).toFixed(1)},${y(v).toFixed(1)}`);
+      }
+      if (seg.length > 1) segs.push(seg);
+      for (const sg of segs) {
+        if (s.fill !== false) {
+          const first = sg[0].split(',')[0], last = sg[sg.length - 1].split(',')[0];
+          out += `<polygon points="${first},${plotH} ${sg.join(' ')} ${last},${plotH}" fill="url(#${this.uid}-${s.key})"/>`;
+        }
+        out += `<polyline points="${sg.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
+      }
+      // direct label at line end
+      const lastIdx = (() => { for (let i = n - 1; i >= 0; i--) if (vals[i] != null) return i; return -1; })();
+      if (lastIdx >= 0 && this.o.series.length > 1) {
+        out += `<text x="${Math.min(x(this.d.t[lastIdx]) + 5, w - 30)}" y="${y(vals[lastIdx]) + 3.5}" font-size="10" fill="var(--ink-2)">${esc(s.label)}</text>`;
+      }
+    }
+    // hover crosshair
+    if (this.hover != null && n) {
+      const i = this.hover, hx = x(this.d.t[i]);
+      out += `<line x1="${hx}" y1="0" x2="${hx}" y2="${plotH}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>`;
+      for (const s of this.o.series) {
+        const v = this.d[s.key][i];
+        if (v != null) out += `<circle cx="${hx}" cy="${y(v)}" r="3.5" fill="${s.color}" stroke="var(--panel)" stroke-width="2"/>`;
+      }
+    }
+    this.svg.innerHTML = out;
+    if (this.o.legendEl) {
+      this.o.legendEl.innerHTML = this.o.series.map(s => {
+        const vals = this.d[s.key];
+        let last = null;
+        for (let i = vals.length - 1; i >= 0; i--) if (vals[i] != null) { last = vals[i]; break; }
+        return `<span><span class="dot" style="background:${s.color}"></span>${esc(s.label)}<span class="lv">${last == null ? '—' : this.o.yFmt(last)}</span></span>`;
+      }).join('');
+    }
+  }
+  onMove(e) {
+    const n = this.d.t.length;
+    if (!n) return;
+    const r = this.el.getBoundingClientRect();
+    const now = Date.now(), tAt = now - (1 - (e.clientX - r.left) / r.width) * this.o.spanMs;
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < n; i++) { const d = Math.abs(this.d.t[i] - tAt); if (d < bd) { bd = d; best = i; } }
+    this.hover = best;
+    this.render();
+    const rows = this.o.series.map(s => {
+      const v = this.d[s.key][best];
+      return `<div class="tt-row"><span class="dot" style="background:${s.color}"></span>${esc(s.label)}<b>${v == null ? '—' : this.o.yFmt(v)}</b></div>`;
+    }).join('');
+    showTooltip(e.clientX, e.clientY, `<div class="tt-time">${fmtClock(this.d.t[best])}</div>${rows}`);
+  }
+}
+
+/* ---------- shared live state ---------- */
+const bus = new EventTarget();
+const live = { fast: null, gpu: null, disks: null, staticInfo: null };
+
+const es = new EventSource('/api/live');
+es.onopen = () => { $('live-dot').classList.add('on'); $('live-label').textContent = 'live'; };
+es.onerror = () => { $('live-dot').classList.remove('on'); $('live-label').textContent = 'reconnecting'; };
+for (const ev of ['fast', 'gpu', 'disks']) {
+  es.addEventListener(ev, e => {
+    live[ev] = JSON.parse(e.data);
+    if (ev === 'fast') {
+      $('uptime-chip').innerHTML = `UP <b>${fmtUp(live.fast.uptime)}</b>`;
+    }
+    bus.dispatchEvent(new CustomEvent(ev, { detail: live[ev] }));
+  });
+}
+
+fetch('/api/static').then(r => r.json()).then(s => {
+  live.staticInfo = s;
+  $('rail-foot').innerHTML =
+    `<b>${esc(s.os.hostname)}</b><br>${esc(s.os.distro).replace('Microsoft ', '')}<br>` +
+    `${s.elevated ? '<span class="status-good">▲ admin</span>' : '<span style="color:var(--muted)">△ not admin</span>'} · v2.1`;
+});
+
+let healthData = null;
+function pollHealth() {
+  fetch('/api/health').then(r => r.json()).then(h => {
+    healthData = h;
+    const color = h.score >= 90 ? 'var(--good)' : h.score >= 70 ? 'var(--warn)' : 'var(--crit)';
+    $('health-chip').innerHTML = `HEALTH <b style="color:${color}">${h.score}</b>`;
+    bus.dispatchEvent(new CustomEvent('health', { detail: h }));
+  }).catch(() => {});
+}
+pollHealth();
+setInterval(pollHealth, 30000);
+$('health-chip').addEventListener('click', () => { location.hash = '#/overview'; });
+
+const histCols = keys => fetch('/api/history').then(r => r.json()).then(hst => {
+  const out = { t: hst.t };
+  for (const k of keys) out[k] = hst[k];
+  return out;
+});
+
+/* ---------- page framework ---------- */
+const PAGES = [
+  { id: 'overview',  label: 'Overview',  glyph: '◈' },
+  { id: 'cpu',       label: 'CPU',       glyph: '▣' },
+  { id: 'gpu',       label: 'GPU',       glyph: '◇' },
+  { id: 'memory',    label: 'Memory',    glyph: '▤' },
+  { id: 'storage',   label: 'Storage',   glyph: '◫' },
+  { id: 'network',   label: 'Network',   glyph: '⇅' },
+  { id: 'processes', label: 'Processes', glyph: '≣' },
+];
+$('nav').innerHTML = PAGES.map(p =>
+  `<div class="nav-item" data-page="${p.id}"><span class="glyph">${p.glyph}</span>${p.label}</div>`).join('');
+$('nav').addEventListener('click', e => {
+  const item = e.target.closest('.nav-item');
+  if (item) location.hash = '#/' + item.dataset.page;
+});
+
+let current = { id: null, cleanup: [] };
+function onCleanup(fn) { current.cleanup.push(fn); }
+function every(ms, fn) { fn(); const id = setInterval(fn, ms); onCleanup(() => clearInterval(id)); }
+function onBus(ev, fn) { bus.addEventListener(ev, fn); onCleanup(() => bus.removeEventListener(ev, fn)); }
+
+function renderPage() {
+  const id = (location.hash.replace('#/', '') || 'overview');
+  const page = pages[id] ? id : 'overview';
+  for (const fn of current.cleanup) { try { fn(); } catch {} }
+  current = { id: page, cleanup: [] };
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.page === page));
+  $('page-title').textContent = PAGES.find(p => p.id === page).label;
+  const el = $('page');
+  el.innerHTML = `<div class="page-enter">${pages[page].html()}</div>`;
+  pages[page].mount();
+  el.scrollTop = 0;
+}
+window.addEventListener('hashchange', renderPage);
+window.addEventListener('resize', () => { if (current.charts) for (const c of current.charts) c.render(); });
+function regChart(c) { (current.charts = current.charts || []).push(c); return c; }
+
+const statBlock = (id, label) => `<div class="panel stat"><h2>${label}</h2><div class="val" id="${id}"></div><div class="sub" id="${id}-sub"></div></div>`;
+const chartPanel = (id, title, height, aside) =>
+  `<div class="panel"><h2>${title}${aside ? `<span class="aside">${aside}</span>` : ''}</h2>
+   <div class="legend" id="${id}-legend" style="margin-bottom:8px"></div>
+   <div class="chart" id="${id}" style="height:${height}px"></div></div>`;
+
+/* ---------- pages ---------- */
+const pages = {};
+
+pages.overview = {
+  html: () => `
+    <div class="stat-row">
+      ${statBlock('ov-cpu', 'CPU load')}
+      ${statBlock('ov-gpu', 'GPU load')}
+      ${statBlock('ov-mem', 'Memory')}
+      ${statBlock('ov-net', 'Network')}
+    </div>
+    ${chartPanel('ov-chart', 'System load', 240, 'last 30 minutes · hover to scrub')}
+    <div class="grid" style="grid-template-columns: 5fr 4fr 5fr; margin-top:14px">
+      <div class="panel"><h2>Health</h2>
+        <div style="display:flex;gap:16px;align-items:center">
+          <div class="ring"><svg width="104" height="104" viewBox="0 0 104 104">
+            <circle cx="52" cy="52" r="44" fill="none" stroke="var(--grid)" stroke-width="8"/>
+            <circle id="ov-ring" cx="52" cy="52" r="44" fill="none" stroke="var(--good)" stroke-width="8"
+              stroke-linecap="butt" stroke-dasharray="276.5 276.5" stroke-dashoffset="276.5" style="transition: stroke-dashoffset 1s ease, stroke .5s"/>
+          </svg><div class="val"><b id="ov-score">–</b><span>/100</span></div></div>
+          <div style="min-width:0;flex:1"><ul class="checks" id="ov-checks"></ul></div>
+        </div>
       </div>
-      <div>
-        <div class="big" id="score-word" style="font-size:20px">Checking…</div>
-        <div class="sub" id="score-sub">Running health checks</div>
-      </div>
+      <div class="panel"><h2>Storage</h2><div id="ov-disks"><div class="note">Loading…</div></div></div>
+      <div class="panel"><h2>Top processes <span class="aside">by CPU</span></h2><table><tbody id="ov-procs"></tbody></table></div>
+    </div>`,
+  mount() {
+    const chart = regChart(new TimeChart($('ov-chart'), {
+      series: [
+        { key: 'cpu', label: 'CPU', color: 'var(--cpu)' },
+        { key: 'gpuUtil', label: 'GPU', color: 'var(--gpu)' },
+        { key: 'mem', label: 'Memory', color: 'var(--mem)', fill: false },
+      ],
+      yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: $('ov-chart-legend'),
+    }));
+    histCols(['cpu', 'gpuUtil', 'mem']).then(c => chart.setData(c));
+    onBus('fast', e => {
+      const d = e.detail, g = live.gpu;
+      chart.append({ t: Date.now(), cpu: d.cpu.avg, mem: d.mem.used / d.mem.total * 100, gpuUtil: g ? g['utilization.gpu'] : null });
+      tween($('ov-cpu'), d.cpu.avg, v => v.toFixed(0) + '%');
+      $('ov-cpu-sub').textContent = `${d.cpu.cores.length} threads` + (d.temp ? ` · ${d.temp.toFixed(0)}°C` : '');
+      tween($('ov-mem'), d.mem.used / 1e9, v => v.toFixed(1) + ' GB');
+      $('ov-mem-sub').textContent = `${(d.mem.used / d.mem.total * 100).toFixed(0)}% of ${(d.mem.total / 1e9).toFixed(0)} GB`;
+      $('ov-net').innerHTML = `<span style="color:var(--down)">↓</span> ${fmtRate(d.net.rx)}`;
+      $('ov-net-sub').innerHTML = `↑ ${fmtRate(d.net.tx)} up`;
+    });
+    onBus('gpu', e => {
+      const g = e.detail;
+      tween($('ov-gpu'), g['utilization.gpu'], v => v.toFixed(0) + '%');
+      $('ov-gpu-sub').textContent = `${g['temperature.gpu']}°C · fan ${dash(g['fan.speed'])}% · ${g['power.draw'] != null ? g['power.draw'].toFixed(0) + ' W' : ''}`;
+    });
+    const renderHealth = h => {
+      if (!h) return;
+      const color = h.score >= 90 ? 'var(--good)' : h.score >= 70 ? 'var(--warn)' : 'var(--crit)';
+      $('ov-ring').style.stroke = color;
+      $('ov-ring').style.strokeDashoffset = 276.5 - (h.score / 100) * 276.5;
+      $('ov-score').textContent = h.score;
+      const icon = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
+      const bad = h.checks.filter(c => c.status !== 'pass');
+      $('ov-checks').innerHTML = (bad.length ? bad : [{ status: 'pass', name: `All ${h.checks.length} checks passed`, detail: '' }])
+        .slice(0, 5).map(c => `<li><span class="icon ${icon[c.status][1]}">${icon[c.status][0]}</span>
+          <span class="name" style="min-width:0">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`).join('');
+    };
+    renderHealth(healthData);
+    onBus('health', e => renderHealth(e.detail));
+    const renderDisks = disks => {
+      if (!disks) return;
+      $('ov-disks').innerHTML = disks.map(d => {
+        const pct = d.used / d.size * 100;
+        const color = pct > 95 ? 'var(--crit)' : pct > 85 ? 'var(--warn)' : 'var(--cpu)';
+        return `<div class="vol"><div class="row"><b>${esc(d.mount)}</b><span class="free">${fmtBytes(d.size - d.used)} free</span></div>
+          <div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div></div>`;
+      }).join('');
+    };
+    renderDisks(live.disks);
+    onBus('disks', e => renderDisks(e.detail));
+    every(4000, () => fetch('/api/processes').then(r => r.json()).then(d => {
+      $('ov-procs').innerHTML = d.list.slice(0, 7).map(p =>
+        `<tr><td><b>${esc(p.name)}</b><span class="pid">${p.pid}</span></td>
+         <td class="num">${p.cpu.toFixed(1)}%</td><td class="num">${fmtBytes(p.memRss)}</td></tr>`).join('');
+    }).catch(() => {}));
+  },
+};
+
+pages.cpu = {
+  html: () => `
+    <div class="stat-row">
+      ${statBlock('cpu-load', 'Load')}
+      ${statBlock('cpu-avg', 'Avg clock')}
+      ${statBlock('cpu-peak', 'Peak core')}
+      ${statBlock('cpu-temp', 'Temp')}
     </div>
-  </div>
+    ${chartPanel('cpu-chart', 'CPU load', 250, 'last 30 minutes · hover to scrub')}
+    <div class="grid" style="grid-template-columns: 8fr 4fr; margin-top:14px">
+      <div class="panel"><h2>Per-core effective clock &amp; load</h2><div class="core-grid" id="cpu-cores"></div></div>
+      <div class="panel"><h2>Processor</h2><div id="cpu-specs"><div class="note">Loading…</div></div></div>
+    </div>`,
+  mount() {
+    const chart = regChart(new TimeChart($('cpu-chart'), {
+      series: [{ key: 'cpu', label: 'CPU', color: 'var(--cpu)' }],
+      yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: $('cpu-chart-legend'),
+    }));
+    histCols(['cpu']).then(c => chart.setData(c));
+    onBus('fast', e => {
+      chart.append({ t: Date.now(), cpu: e.detail.cpu.avg });
+      tween($('cpu-load'), e.detail.cpu.avg, v => v.toFixed(0) + '%');
+      $('cpu-load-sub').textContent = 'total across all threads';
+    });
+    every(3000, () => fetch('/api/detail/cpu').then(r => r.json()).then(d => {
+      const clocks = d.coreClocks || [];
+      const avg = clocks.length ? clocks.reduce((s, c) => s + c.ghz, 0) / clocks.length : null;
+      const peak = clocks.length ? Math.max(...clocks.map(c => c.ghz)) : null;
+      if (avg) tween($('cpu-avg'), avg, v => v.toFixed(2) + ' GHz');
+      if (peak) tween($('cpu-peak'), peak, v => v.toFixed(2) + ' GHz');
+      $('cpu-avg-sub').textContent = `base ${d.baseGhz} GHz`;
+      $('cpu-peak-sub').textContent = 'fastest core right now';
+      $('cpu-temp').textContent = d.tempC != null ? d.tempC.toFixed(0) + '°C' : '—';
+      $('cpu-temp-sub').textContent = d.tempC != null ? '' : 'not exposed by Windows without a sensor driver';
+      $('cpu-cores').innerHTML = d.coreLoads.map((load, i) => {
+        const clk = clocks.find(c => c.core === i);
+        return `<div class="core-cell">C${i} <b>${clk ? clk.ghz.toFixed(1) + ' GHz' : '—'}</b>
+          <div class="mini-track"><div class="mini-fill" style="width:${Math.min(100, load)}%"></div></div></div>`;
+      }).join('');
+      $('cpu-specs').innerHTML =
+        `<div class="kv"><span class="k">Model</span><span class="v"><b>${esc(d.brand)}</b></span></div>
+         <div class="kv"><span class="k">Cores / threads</span><span class="v">${d.physicalCores}c / ${d.threads}t</span></div>
+         <div class="kv"><span class="k">Socket</span><span class="v">${esc(dash(d.socket))}</span></div>
+         <div class="kv"><span class="k">Cache L2 / L3</span><span class="v">${fmtBytes(d.cache?.l2 || 0)} / ${fmtBytes(d.cache?.l3 || 0)}</span></div>
+         <div class="kv"><span class="k">Virtualization</span><span class="v">${d.virtualization ? 'enabled' : 'disabled'}</span></div>
+         <div class="kv"><span class="k">Load split</span><span class="v">${d.loadUser.toFixed(0)}% user · ${d.loadSystem.toFixed(0)}% system</span></div>`;
+    }).catch(() => {}));
+  },
+};
 
-  <div class="card span3 clickable" data-panel="cpu">
-    <h2>CPU <span class="more">details ›</span></h2>
-    <div class="big"><span id="cpu-now">–</span><small> %</small> <small id="cpu-temp"></small></div>
-    <div class="spark" id="cpu-spark"></div>
-    <div id="cores"></div>
-  </div>
-
-  <div class="card span3 clickable" data-panel="memory">
-    <h2>Memory <span class="more">details ›</span></h2>
-    <div class="big"><span id="mem-now">–</span><small id="mem-total"></small></div>
-    <div class="sub" id="mem-pct"></div>
-    <div class="spark" id="mem-spark"></div>
-  </div>
-
-  <div class="card span3 clickable" data-panel="gpu">
-    <h2>GPU <span class="more">details ›</span></h2>
-    <div class="big"><span id="gpu-now">–</span><small> %</small> <small id="gpu-temp"></small></div>
-    <div class="sub" id="gpu-sub">waiting for data…</div>
-    <div class="spark" id="gpu-spark"></div>
-  </div>
-
-  <div class="card span5 clickable" data-panel="network">
-    <h2>Network <span class="more">details ›</span></h2>
-    <div class="big" style="font-size:20px">
-      <span id="net-down">–</span> <small>down</small>&nbsp;&nbsp;
-      <span id="net-up">–</span> <small>up</small>
+pages.gpu = {
+  html: () => `
+    <div class="stat-row">
+      ${statBlock('gpu-util', 'GPU load')}
+      ${statBlock('gpu-temp', 'Temp')}
+      ${statBlock('gpu-fan', 'Fan')}
+      ${statBlock('gpu-pow', 'Power')}
     </div>
-    <div class="spark" id="net-spark"></div>
-    <div class="legend">
-      <span><span class="dot" style="background:var(--down)"></span>Download</span>
-      <span><span class="dot" style="background:var(--up)"></span>Upload</span>
+    ${chartPanel('gpu-chart', 'GPU load &amp; VRAM', 230, 'last 30 minutes · hover to scrub')}
+    <div style="margin-top:14px">${chartPanel('gpu-temp-chart', 'GPU temperature', 180, 'yellow band = warm · red = too hot')}</div>
+    <div class="panel" style="margin-top:14px"><h2>Device</h2><div id="gpu-specs"><div class="note">Loading…</div></div></div>`,
+  mount() {
+    const chart = regChart(new TimeChart($('gpu-chart'), {
+      series: [
+        { key: 'gpuUtil', label: 'GPU load', color: 'var(--gpu)' },
+        { key: 'gpuVram', label: 'VRAM', color: 'var(--vram)', fill: false },
+      ],
+      yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: $('gpu-chart-legend'),
+    }));
+    const tempChart = regChart(new TimeChart($('gpu-temp-chart'), {
+      series: [{ key: 'gpuTemp', label: 'Temp', color: 'var(--gpu)' }],
+      yMax: 105, yFmt: v => v.toFixed(0) + '°C', legendEl: $('gpu-temp-chart-legend'),
+      bands: [{ from: 83, to: 90, color: 'var(--warn)' }, { from: 90, to: 105, color: 'var(--crit)' }],
+    }));
+    histCols(['gpuUtil', 'gpuVram', 'gpuTemp']).then(c => { chart.setData(c); tempChart.setData(c); });
+    onBus('fast', () => {
+      const g = live.gpu, t = Date.now();
+      chart.append({ t, gpuUtil: g ? g['utilization.gpu'] : null, gpuVram: g && g['memory.total'] ? g['memory.used'] / g['memory.total'] * 100 : null });
+      tempChart.append({ t, gpuTemp: g ? g['temperature.gpu'] : null });
+    });
+    onBus('gpu', e => {
+      const g = e.detail;
+      tween($('gpu-util'), g['utilization.gpu'], v => v.toFixed(0) + '%');
+      $('gpu-util-sub').textContent = `${(g['memory.used'] / 1024).toFixed(1)} / ${(g['memory.total'] / 1024).toFixed(0)} GB VRAM`;
+      tween($('gpu-temp'), g['temperature.gpu'], v => v.toFixed(0) + '°C');
+      tween($('gpu-fan'), g['fan.speed'] ?? 0, v => v.toFixed(0) + '%');
+      tween($('gpu-pow'), g['power.draw'] ?? 0, v => v.toFixed(0) + ' W');
+      $('gpu-pow-sub').textContent = `core ${dash(g['clocks.sm'])} MHz`;
+    });
+    every(5000, () => fetch('/api/detail/gpu').then(r => r.json()).then(d => {
+      if (!d.nvidia) { $('gpu-specs').innerHTML = '<div class="note">No NVIDIA driver — deep GPU telemetry needs nvidia-smi.</div>'; return; }
+      $('gpu-specs').innerHTML =
+        `<div class="kv"><span class="k">Model</span><span class="v"><b>${esc(d.name)}</b></span></div>
+         <div class="kv"><span class="k">Clocks (core / mem)</span><span class="v">${dash(d['clocks.sm'])} / ${dash(d['clocks.mem'])} MHz (max ${dash(d['clocks.max.sm'])} / ${dash(d['clocks.max.mem'])})</span></div>
+         <div class="kv"><span class="k">Power limit</span><span class="v">${d['power.limit'] != null ? d['power.limit'].toFixed(0) + ' W' : '—'} · state ${esc(dash(d.pstate))}</span></div>
+         <div class="kv"><span class="k">PCIe link</span><span class="v">Gen ${dash(d['pcie.link.gen.current'])} ×${dash(d['pcie.link.width.current'])} (max Gen ${dash(d['pcie.link.gen.max'])})</span></div>
+         <div class="kv"><span class="k">Driver / VBIOS</span><span class="v">${esc(dash(d.driver_version))} / ${esc(dash(d.vbios_version))}</span></div>`;
+    }).catch(() => {}));
+  },
+};
+
+pages.memory = {
+  html: () => `
+    <div class="stat-row c3">
+      ${statBlock('m-used', 'In use')}
+      ${statBlock('m-free', 'Available')}
+      ${statBlock('m-page', 'Page file')}
     </div>
-  </div>
+    ${chartPanel('m-chart', 'Memory usage', 240, 'last 30 minutes · hover to scrub')}
+    <div class="panel" style="margin-top:14px"><h2>Modules</h2><div id="m-mods"><div class="note">Loading…</div></div></div>`,
+  mount() {
+    const chart = regChart(new TimeChart($('m-chart'), {
+      series: [{ key: 'mem', label: 'Used', color: 'var(--mem)' }],
+      yMax: 100, yFmt: v => v.toFixed(0) + '%', legendEl: $('m-chart-legend'),
+    }));
+    histCols(['mem']).then(c => chart.setData(c));
+    onBus('fast', e => {
+      const d = e.detail;
+      chart.append({ t: Date.now(), mem: d.mem.used / d.mem.total * 100 });
+      tween($('m-used'), d.mem.used / 1e9, v => v.toFixed(1) + ' GB');
+      $('m-used-sub').textContent = `${(d.mem.used / d.mem.total * 100).toFixed(0)}% of ${(d.mem.total / 1e9).toFixed(0)} GB`;
+      tween($('m-free'), (d.mem.total - d.mem.used) / 1e9, v => v.toFixed(1) + ' GB');
+      tween($('m-page'), d.mem.swapUsed / 1e9, v => v.toFixed(1) + ' GB');
+      $('m-page-sub').textContent = `of ${(d.mem.swapTotal / 1e9).toFixed(1)} GB`;
+    });
+    every(10000, () => fetch('/api/detail/memory').then(r => r.json()).then(d => {
+      $('m-mods').innerHTML = d.modules.map((m, i) =>
+        `<div class="kv"><span class="k">Module ${i + 1} ${m.bank ? '· ' + esc(m.bank) : ''}</span>
+         <span class="v"><b>${fmtBytes(m.size)} ${esc(m.type)}</b> @ ${m.clock || '—'} MT/s · ${esc(dash(m.partNum))} · ${esc(dash(m.manufacturer))}${m.voltage ? ' · ' + m.voltage + ' V' : ''}</span></div>`).join('');
+    }).catch(() => {}));
+  },
+};
 
-  <div class="card span7 clickable" data-panel="storage">
-    <h2>Storage <span class="more">details ›</span></h2>
-    <div id="disks"><div class="sub">Loading…</div></div>
-  </div>
+pages.storage = {
+  html: () => `
+    <div class="grid" style="grid-template-columns: 5fr 7fr">
+      <div class="panel"><h2>Volumes</h2><div id="st-vols"><div class="note">Loading…</div></div></div>
+      <div class="panel"><h2>Physical drives</h2><div id="st-disks"><div class="note">Loading…</div></div></div>
+    </div>`,
+  mount() {
+    const renderVols = disks => {
+      if (!disks) return;
+      $('st-vols').innerHTML = disks.map(d => {
+        const pct = d.used / d.size * 100;
+        const color = pct > 95 ? 'var(--crit)' : pct > 85 ? 'var(--warn)' : 'var(--cpu)';
+        return `<div class="vol"><div class="row"><b>${esc(d.mount)}</b>
+          <span class="free">${fmtBytes(d.size - d.used)} free of ${fmtBytes(d.size)} · ${pct.toFixed(0)}%</span></div>
+          <div class="track"><div class="fill" style="width:${pct}%;background:${color}"></div></div></div>`;
+      }).join('');
+    };
+    renderVols(live.disks);
+    onBus('disks', e => renderVols(e.detail));
+    every(15000, () => fetch('/api/detail/storage').then(r => r.json()).then(d => {
+      let html = d.reliabilityAvailable ? '' : `<div class="hint">Drive temp, wear and power-on hours need admin — run Pulse elevated to unlock them.</div>`;
+      html += d.disks.map(disk =>
+        `<div style="margin-bottom:12px">
+          <div style="font-weight:700;font-size:12.5px;margin-bottom:2px">${esc(disk.name)}
+            <span style="color:${disk.smartStatus === 'Ok' || disk.smartStatus === 'ok' ? 'var(--good)' : 'var(--warn)'};font-size:11px;margin-left:6px">● ${esc(dash(disk.smartStatus)).toUpperCase()}</span></div>
+          <div class="note">${esc(disk.type)} · ${esc(dash(disk.interfaceType))} · ${fmtBytes(disk.size)}${disk.firmware ? ' · fw ' + esc(disk.firmware) : ''}
+          ${d.reliabilityAvailable ? `<br>${disk.tempC != null ? '<b style="color:var(--ink)">' + disk.tempC + '°C</b> · ' : ''}${disk.wearPct != null ? disk.wearPct + '% worn · ' : ''}${disk.powerOnHours != null ? disk.powerOnHours.toLocaleString() + ' h powered on · ' : ''}errors ${dash(disk.readErrors)}r/${dash(disk.writeErrors)}w` : ''}</div>
+        </div>`).join('');
+      $('st-disks').innerHTML = html;
+    }).catch(() => {}));
+  },
+};
 
-  <div class="card span12">
-    <h2>Health checks</h2>
-    <ul class="checks" id="checks"><li><span class="detail">Running…</span></li></ul>
-  </div>
-
-  <div class="card span12">
-    <div class="proc-head">
-      <h2>Processes</h2>
-      <input id="proc-search" type="search" placeholder="Filter by name or PID…">
-      <span class="count" id="proc-count"></span>
+pages.network = {
+  html: () => `
+    <div class="stat-row c3">
+      ${statBlock('n-down', 'Download')}
+      ${statBlock('n-up', 'Upload')}
+      ${statBlock('n-link', 'Link')}
     </div>
-    <table>
-      <thead>
-        <tr>
+    ${chartPanel('n-chart', 'Traffic', 250, 'last 30 minutes · hover to scrub')}
+    <div class="panel" style="margin-top:14px"><h2>Adapters</h2><div id="n-ifaces"><div class="note">Loading…</div></div></div>`,
+  mount() {
+    const chart = regChart(new TimeChart($('n-chart'), {
+      series: [
+        { key: 'rx', label: 'Download', color: 'var(--down)' },
+        { key: 'tx', label: 'Upload', color: 'var(--up)', fill: false },
+      ],
+      yFmt: fmtRate, legendEl: $('n-chart-legend'),
+    }));
+    histCols(['rx', 'tx']).then(c => chart.setData(c));
+    onBus('fast', e => {
+      const d = e.detail;
+      chart.append({ t: Date.now(), rx: d.net.rx, tx: d.net.tx });
+      tween($('n-down'), d.net.rx, fmtRate);
+      tween($('n-up'), d.net.tx, fmtRate);
+    });
+    every(4000, () => fetch('/api/detail/network').then(r => r.json()).then(d => {
+      const up = d.interfaces.filter(i => i.state === 'up');
+      $('n-link').textContent = up.length && up[0].speedMbit ? (up[0].speedMbit >= 1000 ? up[0].speedMbit / 1000 + ' Gbit' : up[0].speedMbit + ' Mbit') : '—';
+      $('n-link-sub').textContent = up.length ? esc(up[0].name) : 'no active adapter';
+      $('n-ifaces').innerHTML = d.interfaces.map(i =>
+        `<div class="kv"><span class="k"><span style="color:${i.state === 'up' ? 'var(--good)' : 'var(--baseline)'}">●</span> ${esc(i.name)}</span>
+         <span class="v">${i.state === 'up'
+           ? `<b>↓ ${fmtRate(i.rx || 0)} · ↑ ${fmtRate(i.tx || 0)}</b> · ${esc(i.ip4 || '')} · ${i.rxTotal != null ? fmtBytes(i.rxTotal) + ' in / ' + fmtBytes(i.txTotal) + ' out since boot' : ''}`
+           : 'down'}</span></div>`).join('');
+    }).catch(() => {}));
+  },
+};
+
+pages.processes = {
+  html: () => `
+    ${chartPanel('p-chart', 'Top offenders — CPU', 220, 'tracked every 5s, last 30 minutes')}
+    <div class="panel" style="margin-top:14px">
+      <h2 style="margin-bottom:12px">All processes
+        <span style="display:inline-flex;gap:12px;align-items:center;text-transform:none;letter-spacing:0">
+          <input id="p-search" type="search" placeholder="Filter by name or PID…">
+          <span class="aside" id="p-count"></span>
+        </span>
+      </h2>
+      <table>
+        <thead><tr>
           <th>Name</th>
           <th class="num sortable" data-sort="cpu">CPU % <span id="arr-cpu">▾</span></th>
           <th class="bar-cell"></th>
           <th class="num sortable" data-sort="mem">Memory <span id="arr-mem"></span></th>
-          <th style="width:70px"></th>
-        </tr>
-      </thead>
-      <tbody id="proc-body"></tbody>
-    </table>
-  </div>
-
-</div>
-
-<div id="backdrop"></div>
-<aside id="drawer">
-  <div id="drawer-head">
-    <span id="drawer-title"></span>
-    <button id="drawer-close" title="Close (Esc)">✕</button>
-  </div>
-  <div id="drawer-body"></div>
-</aside>
-
-<div id="tooltip"></div>
-
-<script>
-const $ = id => document.getElementById(id);
-const tooltip = $('tooltip');
-
-// ---------- formatting ----------
-const fmtBytes = b => b >= 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b >= 1e6 ? (b / 1e6).toFixed(0) + ' MB' : (b / 1e3).toFixed(0) + ' KB';
-const fmtRate = b => b >= 1e6 ? (b / 1e6).toFixed(1) + ' MB/s' : (b / 1e3).toFixed(0) + ' KB/s';
-const fmtUp = s => {
-  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
-  return (d ? d + 'd ' : '') + h + 'h ' + m + 'm';
-};
-const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const dash = v => v == null || v === '' ? '—' : v;
-
-// ---------- sparkline (SVG, 1-2 series, hover crosshair) ----------
-class Spark {
-  constructor(el, series, opts = {}) {
-    this.el = el; this.series = series; this.opts = opts;
-    this.data = series.map(() => []);
-    this.N = 90;
-    this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    el.appendChild(this.svg);
-    el.addEventListener('mousemove', e => this.hover(e));
-    el.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; this.hoverIdx = -1; this.render(); });
-    this.hoverIdx = -1;
-  }
-  push(vals) {
-    vals.forEach((v, i) => { this.data[i].push(v); if (this.data[i].length > this.N) this.data[i].shift(); });
-    this.render();
-  }
-  scaleMax() {
-    if (this.opts.max) return this.opts.max;
-    return Math.max(1, ...this.data.flat()) * 1.15;
-  }
-  render() {
-    const w = this.el.clientWidth, h = this.el.clientHeight;
-    if (!w) return;
-    this.svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    const max = this.scaleMax(), n = this.data[0].length;
-    const x = i => (i / (this.N - 1)) * w, y = v => h - (v / max) * (h - 4);
-    let out = `<line x1="0" y1="${h}" x2="${w}" y2="${h}" stroke="var(--baseline)" stroke-width="1"/>
-               <line x1="0" y1="${h / 2}" x2="${w}" y2="${h / 2}" stroke="var(--grid)" stroke-width="1"/>`;
-    this.series.forEach((s, si) => {
-      const d = this.data[si];
-      if (d.length < 2) return;
-      const pts = d.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`);
-      if (s.fill) out += `<polygon points="${x(0)},${h} ${pts.join(' ')} ${x(d.length - 1)},${h}" fill="${s.color}" opacity="0.14"/>`;
-      out += `<polyline points="${pts.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
-    });
-    if (this.hoverIdx >= 0 && this.hoverIdx < n) {
-      const hx = x(this.hoverIdx);
-      out += `<line x1="${hx}" y1="0" x2="${hx}" y2="${h}" stroke="var(--muted)" stroke-width="1" stroke-dasharray="3 3"/>`;
-      this.series.forEach((s, si) => {
-        const v = this.data[si][this.hoverIdx];
-        if (v !== undefined) out += `<circle cx="${hx}" cy="${y(v)}" r="4" fill="${s.color}" stroke="var(--surface)" stroke-width="2"/>`;
-      });
-    }
-    this.svg.innerHTML = out;
-  }
-  hover(e) {
-    const r = this.el.getBoundingClientRect();
-    const idx = Math.round(((e.clientX - r.left) / r.width) * (this.N - 1));
-    this.hoverIdx = Math.min(idx, this.data[0].length - 1);
-    this.render();
-    const v = this.series.map((s, si) => {
-      const val = this.data[si][this.hoverIdx];
-      return val === undefined ? null : `<b>${s.label}:</b> ${this.opts.fmt ? this.opts.fmt(val) : val.toFixed(0)}`;
-    }).filter(Boolean);
-    if (!v.length) return;
-    const ago = (this.data[0].length - 1 - this.hoverIdx) * (this.opts.tick || 2);
-    tooltip.innerHTML = v.join('&nbsp;&nbsp;') + ` <span style="color:var(--muted)">· ${ago}s ago</span>`;
-    tooltip.style.display = 'block';
-    tooltip.style.left = Math.min(e.clientX + 14, innerWidth - tooltip.offsetWidth - 8) + 'px';
-    tooltip.style.top = (e.clientY - 34) + 'px';
-  }
-}
-
-const cpuSpark = new Spark($('cpu-spark'), [{ color: 'var(--cpu)', label: 'CPU', fill: true }], { max: 100, fmt: v => v.toFixed(0) + '%' });
-const memSpark = new Spark($('mem-spark'), [{ color: 'var(--mem)', label: 'Used', fill: true }], { max: 100, fmt: v => v.toFixed(0) + '%' });
-const gpuSpark = new Spark($('gpu-spark'), [{ color: 'var(--gpu)', label: 'GPU', fill: true }], { max: 100, fmt: v => v.toFixed(0) + '%', tick: 3 });
-const netSpark = new Spark($('net-spark'), [
-  { color: 'var(--down)', label: 'Down' },
-  { color: 'var(--up)', label: 'Up' },
-], { fmt: fmtRate });
-
-// ---------- static info ----------
-let staticInfo = null;
-fetch('/api/static').then(r => r.json()).then(s => {
-  staticInfo = s;
-  renderSysline(null);
-});
-function renderSysline(uptime) {
-  if (!staticInfo) return;
-  const s = staticInfo;
-  $('sysline').innerHTML =
-    `<b>${esc(s.os.hostname)}</b> · ${esc(s.os.distro)} (build ${esc(s.os.build)}) · ${esc(s.cpu.brand)} — ${s.cpu.physicalCores}c/${s.cpu.cores}t` +
-    ` · ${(s.memTotal / 1e9).toFixed(0)} GB RAM` +
-    (s.gpus.length ? ` · ${esc(s.gpus[0].model)}` : '') +
-    (uptime ? ` · up <b>${fmtUp(uptime)}</b>` : '');
-}
-
-// ---------- live stream ----------
-let coreEls = [];
-function connect() {
-  const es = new EventSource('/api/live');
-  es.onopen = () => { $('conn').className = 'live'; $('conn').textContent = 'live'; };
-  es.onerror = () => { $('conn').className = 'dead'; $('conn').textContent = 'reconnecting…'; };
-
-  es.addEventListener('fast', e => {
-    const d = JSON.parse(e.data);
-    $('cpu-now').textContent = d.cpu.avg.toFixed(0);
-    $('cpu-temp').textContent = d.temp ? ` · ${d.temp.toFixed(0)}°C` : '';
-    cpuSpark.push([d.cpu.avg]);
-
-    if (coreEls.length !== d.cpu.cores.length) {
-      $('cores').innerHTML = '';
-      coreEls = d.cpu.cores.map(() => { const el = document.createElement('div'); $('cores').appendChild(el); return el; });
-    }
-    d.cpu.cores.forEach((c, i) => {
-      coreEls[i].style.height = Math.max(2, c) + '%';
-      coreEls[i].title = `Core ${i}: ${c.toFixed(0)}%`;
-    });
-
-    const memPct = d.mem.used / d.mem.total * 100;
-    $('mem-now').textContent = (d.mem.used / 1e9).toFixed(1);
-    $('mem-total').textContent = ` / ${(d.mem.total / 1e9).toFixed(0)} GB`;
-    $('mem-pct').textContent = memPct.toFixed(0) + '% in use' + (d.mem.swapTotal ? ` · page file ${fmtBytes(d.mem.swapUsed)}` : '');
-    memSpark.push([memPct]);
-
-    $('net-down').textContent = fmtRate(d.net.rx);
-    $('net-up').textContent = fmtRate(d.net.tx);
-    netSpark.push([d.net.rx, d.net.tx]);
-
-    renderSysline(d.uptime);
-  });
-
-  es.addEventListener('gpu', e => {
-    const g = JSON.parse(e.data);
-    $('gpu-now').textContent = g['utilization.gpu'] ?? '–';
-    $('gpu-temp').textContent = g['temperature.gpu'] != null ? ` · ${g['temperature.gpu']}°C` : '';
-    $('gpu-sub').textContent =
-      `${(g['memory.used'] / 1024).toFixed(1)} / ${(g['memory.total'] / 1024).toFixed(0)} GB VRAM` +
-      ` · fan ${g['fan.speed'] ?? '–'}%` +
-      (g['power.draw'] != null ? ` · ${g['power.draw'].toFixed(0)} W` : '');
-    gpuSpark.push([g['utilization.gpu'] ?? 0]);
-  });
-
-  es.addEventListener('disks', e => {
-    const disks = JSON.parse(e.data);
-    $('disks').innerHTML = disks.map(d => {
-      const pct = d.used / d.size * 100;
-      const color = pct > 95 ? 'var(--crit)' : pct > 85 ? 'var(--warn)' : 'var(--cpu)';
-      return `<div class="disk">
-        <div class="row"><b>${esc(d.mount)}</b><span class="free">${fmtBytes(d.size - d.used)} free of ${fmtBytes(d.size)} · ${pct.toFixed(0)}% used</span></div>
-        <div class="track" style="margin:0"><div class="fill" style="width:${pct}%;background:${color}"></div></div>
-      </div>`;
-    }).join('');
-  });
-}
-connect();
-
-// ---------- health ----------
-function loadHealth() {
-  fetch('/api/health').then(r => r.json()).then(h => {
-    const arc = $('ring-arc');
-    const color = h.score >= 90 ? 'var(--good)' : h.score >= 70 ? 'var(--warn)' : 'var(--crit)';
-    arc.style.stroke = color;
-    arc.style.transition = 'stroke-dashoffset 1s ease, stroke .5s';
-    arc.style.strokeDashoffset = 314 - (h.score / 100) * 314;
-    $('score').textContent = h.score;
-    $('score-word').textContent = h.score >= 90 ? 'Healthy' : h.score >= 70 ? 'Fair' : 'Needs attention';
-    $('score-word').style.color = color;
-    const warns = h.checks.filter(c => c.status !== 'pass').length;
-    $('score-sub').textContent = warns ? `${warns} item${warns > 1 ? 's' : ''} need${warns > 1 ? '' : 's'} a look` : `All ${h.checks.length} checks passed`;
-
-    const icon = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
-    $('checks').innerHTML = h.checks.map(c =>
-      `<li><span class="icon ${icon[c.status][1]}">${icon[c.status][0]}</span>
-       <span class="name">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`).join('');
-  }).catch(() => {});
-}
-loadHealth();
-setInterval(loadHealth, 30000);
-
-// ---------- drill-down drawer ----------
-const drawer = { open: false, panel: null, timer: null };
-const PANEL_TITLES = { cpu: 'CPU', gpu: 'GPU', memory: 'Memory', storage: 'Storage', network: 'Network', system: 'System' };
-const PANEL_INTERVALS = { cpu: 3000, gpu: 2500, memory: 4000, storage: 15000, network: 3000, system: 60000 };
-
-const kv = (k, v) => `<div class="kv"><span class="k">${k}</span><span class="v">${v}</span></div>`;
-const sect = t => `<div class="sect">${t}</div>`;
-const hero = (val, unit, label) => `<div class="hero"><b>${val}<small> ${unit}</small></b><span>${label}</span></div>`;
-const bar = (pct, color) => `<div class="track"><div class="fill" style="width:${Math.min(100, pct)}%;background:${color}"></div></div>`;
-
-const renderers = {
-  cpu(d) {
-    const avgGhz = d.coreClocks.length ? d.coreClocks.reduce((s, c) => s + c.ghz, 0) / d.coreClocks.length : null;
-    const maxGhz = d.coreClocks.length ? Math.max(...d.coreClocks.map(c => c.ghz)) : null;
-    let html = `<div class="hero-grid">
-      ${hero(d.loadAvg.toFixed(0), '%', 'load')}
-      ${hero(avgGhz ? avgGhz.toFixed(1) : '–', 'GHz', 'avg clock')}
-      ${hero(maxGhz ? maxGhz.toFixed(1) : '–', 'GHz', 'peak core')}
-      ${hero(d.tempC != null ? d.tempC.toFixed(0) : '–', '°C', 'temp')}
-    </div>`;
-    if (d.tempC == null) html += `<div class="drawer-note">CPU temp isn't exposed by Windows without a sensor driver${d.elevated ? '' : ' (running Pulse as administrator sometimes helps)'}.</div>`;
-    html += sect('Processor');
-    html += kv('Model', `<b>${esc(d.brand)}</b>`);
-    html += kv('Cores / threads', `${d.physicalCores}c / ${d.threads}t`);
-    html += kv('Base clock', `${d.baseGhz} GHz${d.maxGhz > d.baseGhz ? ` (max ${d.maxGhz})` : ''}`);
-    if (d.cache) html += kv('Cache L2 / L3', `${fmtBytes(d.cache.l2 || 0)} / ${fmtBytes(d.cache.l3 || 0)}`);
-    html += kv('Virtualization', d.virtualization ? 'enabled' : 'disabled');
-    html += kv('Load split', `${d.loadUser.toFixed(0)}% user · ${d.loadSystem.toFixed(0)}% system`);
-    html += sect(`Per-core effective clock & load`);
-    html += `<div class="core-grid">` + d.coreLoads.map((load, i) => {
-      const clk = d.coreClocks.find(c => c.core === i);
-      return `<div class="core-cell">C${i} <b>${clk ? clk.ghz.toFixed(1) + ' GHz' : '—'}</b>
-        <div class="mini-track"><div class="mini-fill" style="width:${Math.min(100, load)}%"></div></div></div>`;
-    }).join('') + `</div>`;
-    return html;
-  },
-
-  gpu(d) {
-    if (!d.nvidia) {
-      return `<div class="drawer-note">No NVIDIA driver found — deep GPU telemetry needs nvidia-smi.</div>` +
-        (d.controllers || []).map(c => sect(esc(c.model)) + kv('VRAM', c.vram ? c.vram + ' MB' : '—')).join('');
-    }
-    const vramPct = d['memory.used'] / d['memory.total'] * 100;
-    let html = `<div class="hero-grid">
-      ${hero(dash(d['utilization.gpu']), '%', 'gpu load')}
-      ${hero(dash(d['temperature.gpu']), '°C', 'temp')}
-      ${hero(dash(d['fan.speed']), '%', 'fan')}
-      ${hero(d['power.draw'] != null ? d['power.draw'].toFixed(0) : '–', 'W', 'power')}
-    </div>`;
-    html += sect('VRAM');
-    html += kv('Used', `<b>${(d['memory.used'] / 1024).toFixed(1)} GB</b> of ${(d['memory.total'] / 1024).toFixed(0)} GB (${vramPct.toFixed(0)}%)`);
-    html += bar(vramPct, 'var(--gpu)');
-    html += kv('Memory controller load', dash(d['utilization.memory']) + ' %');
-    html += sect('Clocks');
-    html += kv('Core clock', `<b>${dash(d['clocks.sm'])} MHz</b> (max ${dash(d['clocks.max.sm'])})`);
-    html += kv('Memory clock', `${dash(d['clocks.mem'])} MHz (max ${dash(d['clocks.max.mem'])})`);
-    html += kv('Performance state', dash(d.pstate));
-    html += sect('Power & link');
-    html += kv('Power draw / limit', `${d['power.draw'] != null ? d['power.draw'].toFixed(0) : '–'} W / ${d['power.limit'] != null ? d['power.limit'].toFixed(0) : '–'} W`);
-    html += kv('PCIe link', `Gen ${dash(d['pcie.link.gen.current'])} ×${dash(d['pcie.link.width.current'])} (max Gen ${dash(d['pcie.link.gen.max'])})`);
-    html += sect('Device');
-    html += kv('Model', `<b>${esc(d.name)}</b>`);
-    html += kv('Driver', esc(d.driver_version));
-    html += kv('VBIOS', esc(d.vbios_version));
-    return html;
-  },
-
-  memory(d) {
-    const pct = d.used / d.total * 100;
-    let html = `<div class="hero-grid h3">
-      ${hero((d.used / 1e9).toFixed(1), 'GB', 'in use')}
-      ${hero((d.free / 1e9).toFixed(1), 'GB', 'available')}
-      ${hero((d.swapUsed / 1e9).toFixed(1), 'GB', 'page file')}
-    </div>`;
-    html += bar(pct, 'var(--mem)');
-    html += kv('Load', `<b>${pct.toFixed(0)}%</b> of ${(d.total / 1e9).toFixed(0)} GB`);
-    if (d.cached) html += kv('Cached', fmtBytes(d.cached));
-    html += kv('Page file', `${fmtBytes(d.swapUsed)} of ${fmtBytes(d.swapTotal)}`);
-    d.modules.forEach((m, i) => {
-      html += sect(`Module ${i + 1}${m.bank ? ` — ${esc(m.bank)}` : ''}`);
-      html += kv('Size', `<b>${fmtBytes(m.size)}</b> ${esc(m.type)}`);
-      html += kv('Configured clock', m.clock ? m.clock + ' MT/s' : '—');
-      html += kv('Part', esc(dash(m.partNum)));
-      html += kv('Manufacturer', esc(dash(m.manufacturer)));
-      if (m.voltage) html += kv('Voltage', m.voltage + ' V');
-    });
-    return html;
-  },
-
-  storage(d) {
-    let html = '';
-    if (!d.reliabilityAvailable) {
-      html += `<div class="hint">Drive temperature, wear and power-on hours need admin — start Pulse from an elevated terminal to unlock them.</div>`;
-    }
-    d.disks.forEach(disk => {
-      html += sect(esc(disk.name));
-      html += kv('Type', `<b>${esc(disk.type)}</b> · ${esc(dash(disk.interfaceType))} · ${fmtBytes(disk.size)}`);
-      html += kv('SMART status', disk.smartStatus === 'Ok' || disk.smartStatus === 'ok'
-        ? '<span class="status-good">✓ healthy</span>'
-        : esc(dash(disk.smartStatus)));
-      if (disk.firmware) html += kv('Firmware', esc(disk.firmware));
-      if (d.reliabilityAvailable) {
-        html += kv('Temperature', disk.tempC != null ? `<b>${disk.tempC}°C</b>` : '—');
-        html += kv('Wear', disk.wearPct != null ? disk.wearPct + '% worn' : '—');
-        html += kv('Power-on time', disk.powerOnHours != null ? `${disk.powerOnHours.toLocaleString()} h (~${(disk.powerOnHours / 8760).toFixed(1)} yr)` : '—');
-        html += kv('Read / write errors', `${dash(disk.readErrors)} / ${dash(disk.writeErrors)}`);
+          <th style="width:66px"></th>
+        </tr></thead>
+        <tbody id="p-body"></tbody>
+      </table>
+    </div>`,
+  mount() {
+    // fixed 8-slot palette, assigned per PID in first-seen order (color follows the process)
+    const SLOTS = ['#3987e5', '#199e70', '#c98500', '#008300', '#9085e9', '#e66767', '#d55181', '#d95926'];
+    const slotOf = new Map();
+    const chart = regChart(new TimeChart($('p-chart'), {
+      series: [], yFmt: v => v.toFixed(1) + '%', legendEl: $('p-chart-legend'),
+    }));
+    every(10000, () => fetch('/api/prochistory').then(r => r.json()).then(d => {
+      for (const p of d.procs) if (!slotOf.has(p.pid)) slotOf.set(p.pid, slotOf.size % SLOTS.length);
+      chart.o.series = d.procs.map(p => ({ key: 'p' + p.pid, label: `${p.name} ${p.pid}`, color: SLOTS[slotOf.get(p.pid)], fill: false }));
+      // merge per-proc series onto a shared clock
+      const allT = [...new Set(d.procs.flatMap(p => p.t))].sort((a, b) => a - b);
+      const cols = { t: allT };
+      for (const p of d.procs) {
+        const m = new Map(p.t.map((t, i) => [t, p.cpu[i]]));
+        cols['p' + p.pid] = allT.map(t => m.get(t) ?? null);
       }
-    });
-    html += sect('Volumes');
-    d.volumes.forEach(v => {
-      const pct = v.used / v.size * 100;
-      html += kv(`${esc(v.mount)} (${esc(v.fs)})`, `${fmtBytes(v.size - v.used)} free of ${fmtBytes(v.size)}`);
-      html += bar(pct, pct > 95 ? 'var(--crit)' : pct > 85 ? 'var(--warn)' : 'var(--cpu)');
-    });
-    return html;
-  },
+      chart.setData(cols);
+    }).catch(() => {}));
 
-  network(d) {
-    let html = '';
-    d.interfaces.forEach(i => {
-      const up = i.state === 'up';
-      html += sect(`${up ? '<span class="status-good">●</span> ' : '<span style="color:var(--baseline)">●</span> '}${esc(i.name)}`);
-      html += kv('State', up ? '<b>up</b>' : esc(i.state));
-      if (up && (i.rx != null || i.tx != null)) html += kv('Live traffic', `<b>↓ ${fmtRate(i.rx || 0)}</b> · ↑ ${fmtRate(i.tx || 0)}`);
-      html += kv('Type · link', `${esc(dash(i.type))}${i.speedMbit ? ` · ${i.speedMbit >= 1000 ? (i.speedMbit / 1000) + ' Gbit/s' : i.speedMbit + ' Mbit/s'}` : ''}`);
-      if (i.ip4) html += kv('IPv4', esc(i.ip4) + (i.dhcp ? ' (DHCP)' : ' (static)'));
-      if (i.ip6) html += kv('IPv6', esc(i.ip6));
-      html += kv('MAC', esc(dash(i.mac)));
-      if (up && i.rxTotal != null) html += kv('Since boot', `↓ ${fmtBytes(i.rxTotal)} · ↑ ${fmtBytes(i.txTotal)}`);
+    let sortKey = 'cpu', procData = [], confirmPid = null, lastHtml = '', paused = false;
+    const tbl = $('p-body').closest('.panel');
+    tbl.addEventListener('mouseenter', () => { paused = true; });
+    tbl.addEventListener('mouseleave', () => { paused = false; });
+    document.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
+      sortKey = th.dataset.sort;
+      $('arr-cpu').textContent = sortKey === 'cpu' ? '▾' : '';
+      $('arr-mem').textContent = sortKey === 'mem' ? '▾' : '';
+      renderRows();
+    }));
+    $('p-search').addEventListener('input', renderRows);
+    function renderRows() {
+      const q = $('p-search').value.toLowerCase();
+      const rows = procData
+        .filter(p => !q || p.name.toLowerCase().includes(q) || String(p.pid).includes(q))
+        .sort((a, b) => sortKey === 'cpu' ? b.cpu - a.cpu : b.memRss - a.memRss)
+        .slice(0, 30);
+      const html = rows.map(p => `
+        <tr>
+          <td><b>${esc(p.name)}</b><span class="pid">${p.pid}</span></td>
+          <td class="num">${p.cpu.toFixed(1)}</td>
+          <td class="bar-cell"><div class="mini-track"><div class="mini-fill" style="width:${Math.min(100, p.cpu)}%"></div></div></td>
+          <td class="num">${fmtBytes(p.memRss)}</td>
+          <td><button class="kill${confirmPid === p.pid ? ' confirm' : ''}" data-pid="${p.pid}">${confirmPid === p.pid ? 'sure?' : 'end'}</button></td>
+        </tr>`).join('');
+      if (html !== lastHtml) { $('p-body').innerHTML = html; lastHtml = html; }
+    }
+    $('p-body').addEventListener('click', async e => {
+      const btn = e.target.closest('.kill');
+      if (!btn) return;
+      const pid = Number(btn.dataset.pid);
+      if (confirmPid !== pid) {
+        confirmPid = pid;
+        renderRows();
+        setTimeout(() => { if (confirmPid === pid) { confirmPid = null; renderRows(); } }, 8000);
+        return;
+      }
+      confirmPid = null;
+      const r = await fetch('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid }) });
+      if (!r.ok) alert('Could not end process: ' + (await r.json()).error);
     });
-    return html || '<div class="drawer-note">No external network interfaces found.</div>';
-  },
-
-  system(d) {
-    let html = sect('Machine');
-    html += kv('Model', `<b>${esc(dash(d.manufacturer))} ${esc(dash(d.model))}</b>`);
-    html += kv('Motherboard', `${esc(d.board.manufacturer)} ${esc(d.board.model)}`);
-    html += kv('BIOS', `${esc(d.bios.version)} (${esc(dash(d.bios.releaseDate))})`);
-    if (d.activeFans) html += kv('Active cooling devices', `${d.activeFans} reported by ACPI (Windows doesn't expose RPM — GPU fan is on the GPU panel)`);
-    html += sect('Windows');
-    html += kv('Edition', `${esc(d.os.distro)}`);
-    html += kv('Build', `${esc(d.os.release)} (${esc(d.os.build)}) ${esc(d.os.arch)}`);
-    html += kv('Hostname', esc(d.os.hostname));
-    html += kv('Last boot', new Date(d.bootTime).toLocaleString());
-    html += sect('Pulse');
-    html += kv('Running as admin', d.elevated ? 'yes — all sensors unlocked' : 'no — drive temps/wear hidden');
-    return html;
+    every(3500, () => { if (paused) return; fetch('/api/processes').then(r => r.json()).then(d => {
+      procData = d.list;
+      $('p-count').textContent = `${d.all} processes`;
+      renderRows();
+    }).catch(() => {}); });
   },
 };
 
-async function refreshPanel() {
-  if (!drawer.open) return;
-  try {
-    const d = await fetch('/api/detail/' + drawer.panel).then(r => r.json());
-    if (drawer.open) $('drawer-body').innerHTML = renderers[drawer.panel](d);
-  } catch {
-    $('drawer-body').innerHTML = '<div class="hint">Could not load details.</div>';
-  }
-}
-
-function openPanel(panel) {
-  drawer.open = true;
-  drawer.panel = panel;
-  $('drawer-title').textContent = PANEL_TITLES[panel];
-  $('drawer-body').innerHTML = '<div class="drawer-note">Loading…</div>';
-  document.body.classList.add('drawer-open');
-  refreshPanel();
-  clearInterval(drawer.timer);
-  drawer.timer = setInterval(refreshPanel, PANEL_INTERVALS[panel]);
-}
-function closePanel() {
-  drawer.open = false;
-  clearInterval(drawer.timer);
-  document.body.classList.remove('drawer-open');
-}
-document.querySelectorAll('.card.clickable').forEach(c =>
-  c.addEventListener('click', e => {
-    if (e.target.closest('.spark')) return;  // sparkline hover-zone clicks shouldn't navigate
-    openPanel(c.dataset.panel);
-  }));
-$('sysline').addEventListener('click', () => openPanel('system'));
-$('drawer-close').addEventListener('click', closePanel);
-$('backdrop').addEventListener('click', closePanel);
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closePanel(); });
-
-// ---------- processes ----------
-let sortKey = 'cpu', procData = [], confirmPid = null, lastProcHtml = '';
-document.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
-  sortKey = th.dataset.sort;
-  $('arr-cpu').textContent = sortKey === 'cpu' ? '▾' : '';
-  $('arr-mem').textContent = sortKey === 'mem' ? '▾' : '';
-  renderProcs();
-}));
-$('proc-search').addEventListener('input', renderProcs);
-
-function renderProcs() {
-  const q = $('proc-search').value.toLowerCase();
-  const rows = procData
-    .filter(p => !q || p.name.toLowerCase().includes(q) || String(p.pid).includes(q))
-    .sort((a, b) => sortKey === 'cpu' ? b.cpu - a.cpu : b.memRss - a.memRss)
-    .slice(0, 25);
-  const html = rows.map(p => `
-    <tr>
-      <td><b>${esc(p.name)}</b> <span class="pid">${p.pid}</span></td>
-      <td class="num">${p.cpu.toFixed(1)}</td>
-      <td class="bar-cell"><div class="mini-track"><div class="mini-fill" style="width:${Math.min(100, p.cpu)}%"></div></div></td>
-      <td class="num">${fmtBytes(p.memRss)}</td>
-      <td><button class="kill${confirmPid === p.pid ? ' confirm' : ''}" data-pid="${p.pid}">${confirmPid === p.pid ? 'sure?' : 'end'}</button></td>
-    </tr>`).join('');
-  if (html !== lastProcHtml) { $('proc-body').innerHTML = html; lastProcHtml = html; }
-}
-
-$('proc-body').addEventListener('click', async e => {
-  const btn = e.target.closest('.kill');
-  if (!btn) return;
-  const pid = Number(btn.dataset.pid);
-  if (confirmPid !== pid) {
-    confirmPid = pid;
-    renderProcs();
-    setTimeout(() => { if (confirmPid === pid) { confirmPid = null; renderProcs(); } }, 8000);
-    return;
-  }
-  confirmPid = null;
-  const r = await fetch('/api/kill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pid }) });
-  if (!r.ok) alert('Could not end process: ' + (await r.json()).error);
-  pollProcs();
-});
-
-// Freeze the list while the pointer is over it so rows can't shift mid-click.
-let procsPaused = false;
-const procTable = $('proc-body').closest('.card');
-procTable.addEventListener('mouseenter', () => { procsPaused = true; });
-procTable.addEventListener('mouseleave', () => { procsPaused = false; });
-
-async function pollProcs() {
-  if (procsPaused) return;
-  try {
-    const d = await fetch('/api/processes').then(r => r.json());
-    procData = d.list;
-    $('proc-count').textContent = `${d.all} processes`;
-    renderProcs();
-  } catch {}
-}
-pollProcs();
-setInterval(pollProcs, 3500);
-window.addEventListener('resize', () => [cpuSpark, memSpark, gpuSpark, netSpark].forEach(s => s.render()));
+renderPage();
 </script>
 </body>
 </html>

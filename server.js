@@ -1,4 +1,5 @@
-// Pulse — local PC health dashboard. Serves the UI and streams live stats over SSE.
+// Pulse — local PC health dashboard. Serves the UI, keeps 30-minute stat history,
+// and streams live updates over SSE.
 const express = require('express');
 const path = require('path');
 const { execFile, exec } = require('child_process');
@@ -65,6 +66,157 @@ let elevated = null;
 psQuery(`([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)`)
   .then(r => { elevated = String(r).trim() === 'True'; });
 
+// ---------- always-on stat collector with 30-minute history ----------
+const TICK_MS = 2000, HIST_LEN = 900;        // 30 min of 2s samples
+const PROC_MS = 5000, PROC_HIST_LEN = 360;   // 30 min of 5s samples
+
+const hist = { t: [], cpu: [], mem: [], rx: [], tx: [], gpuUtil: [], gpuTemp: [], gpuVram: [] };
+function pushHist(p) {
+  for (const k of Object.keys(hist)) {
+    hist[k].push(p[k] ?? null);
+    if (hist[k].length > HIST_LEN) hist[k].shift();
+  }
+}
+
+const latest = { fast: null, gpu: null, disks: null };
+const sseClients = new Set();
+function broadcast(event, data) {
+  for (const send of sseClients) send(event, data);
+}
+
+const GPU_LIVE_FIELDS = ['name', 'utilization.gpu', 'memory.used', 'memory.total', 'temperature.gpu', 'fan.speed', 'power.draw', 'clocks.sm'];
+
+async function fastTick() {
+  try {
+    const [load, mem, net, temp, time] = await Promise.all([
+      si.currentLoad(), si.mem(), si.networkStats(), si.cpuTemperature(), si.time(),
+    ]);
+    const activeNet = net.reduce((a, n) => ({ rx: a.rx + n.rx_sec, tx: a.tx + n.tx_sec }), { rx: 0, tx: 0 });
+    const g = latest.gpu;
+    latest.fast = {
+      cpu: { avg: load.currentLoad, cores: load.cpus.map(c => c.load) },
+      mem: { used: mem.active, total: mem.total, swapUsed: mem.swapused, swapTotal: mem.swaptotal },
+      net: { rx: activeNet.rx, tx: activeNet.tx },
+      temp: temp.main,
+      uptime: time.uptime,
+    };
+    pushHist({
+      t: Date.now(),
+      cpu: +load.currentLoad.toFixed(1),
+      mem: +(mem.active / mem.total * 100).toFixed(1),
+      rx: Math.round(activeNet.rx),
+      tx: Math.round(activeNet.tx),
+      gpuUtil: g ? g['utilization.gpu'] : null,
+      gpuTemp: g ? g['temperature.gpu'] : null,
+      gpuVram: g && g['memory.total'] ? +(g['memory.used'] / g['memory.total'] * 100).toFixed(1) : null,
+    });
+    broadcast('fast', latest.fast);
+  } catch (err) {
+    logErr('fastTick', err);
+  }
+}
+
+async function gpuTick() {
+  const g = await nvidiaQuery(GPU_LIVE_FIELDS);
+  if (g && g[0]) {
+    latest.gpu = g[0];
+    broadcast('gpu', g[0]);
+  }
+}
+
+async function diskTick() {
+  try {
+    const fsSizes = await si.fsSize();
+    latest.disks = fsSizes.filter(d => d.size > 0).map(d => ({ mount: d.mount, size: d.size, used: d.used }));
+    broadcast('disks', latest.disks);
+  } catch (err) {
+    logErr('diskTick', err);
+  }
+}
+
+// Per-process history: track anything that shows up among the top CPU/memory users.
+const procHist = new Map(); // pid → {name, lastSeen, t[], cpu[], mem[]}
+let procCache = { all: 0, list: [] };
+
+async function procTick() {
+  try {
+    const procs = await si.processes();
+    const list = procs.list
+      .filter(p => p.pid > 4)
+      .sort((a, b) => b.cpu - a.cpu)
+      .map(p => ({ pid: p.pid, name: p.name, cpu: p.cpu, memRss: p.memRss * 1024 }));
+    procCache = { all: procs.all, list };
+
+    const now = Date.now();
+    const track = new Map();
+    for (const p of list.slice(0, 15)) track.set(p.pid, p);
+    for (const p of [...list].sort((a, b) => b.memRss - a.memRss).slice(0, 5)) track.set(p.pid, p);
+    for (const p of track.values()) {
+      let h = procHist.get(p.pid);
+      if (!h) { h = { name: p.name, lastSeen: 0, t: [], cpu: [], mem: [] }; procHist.set(p.pid, h); }
+      h.lastSeen = now;
+      h.t.push(now); h.cpu.push(+p.cpu.toFixed(1)); h.mem.push(p.memRss);
+      if (h.t.length > PROC_HIST_LEN) { h.t.shift(); h.cpu.shift(); h.mem.shift(); }
+    }
+    for (const [pid, h] of procHist) if (now - h.lastSeen > 600000) procHist.delete(pid);
+  } catch (err) {
+    logErr('procTick', err);
+  }
+}
+
+setInterval(fastTick, TICK_MS);
+setInterval(gpuTick, 3000);
+setInterval(diskTick, 30000);
+setInterval(procTick, PROC_MS);
+fastTick(); gpuTick(); diskTick(); procTick();
+
+// ---------- live stream (SSE) ----------
+app.get('/api/live', (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  res.flushHeaders();
+
+  let closed = false;
+  const send = (event, data) => {
+    if (closed || res.writableEnded || res.destroyed) return;
+    try {
+      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    } catch (err) {
+      closed = true;
+      sseClients.delete(send);
+      logErr('sse-write', err);
+    }
+  };
+  sseClients.add(send);
+  if (latest.fast) send('fast', latest.fast);
+  if (latest.gpu) send('gpu', latest.gpu);
+  if (latest.disks) send('disks', latest.disks);
+
+  const drop = () => { closed = true; sseClients.delete(send); };
+  req.on('close', drop);
+  req.on('error', drop);
+  res.on('error', drop);
+});
+
+// ---------- history ----------
+app.get('/api/history', (req, res) => {
+  res.json({ tickMs: TICK_MS, ...hist });
+});
+
+app.get('/api/prochistory', (req, res) => {
+  const ranked = [...procHist.entries()]
+    .map(([pid, h]) => {
+      const recent = h.cpu.slice(-24); // last ~2 minutes
+      const score = recent.reduce((s, v) => s + v, 0) / Math.max(1, recent.length);
+      return { pid, h, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8);
+  res.json({
+    tickMs: PROC_MS,
+    procs: ranked.map(({ pid, h }) => ({ pid, name: h.name, t: h.t, cpu: h.cpu, mem: h.mem })),
+  });
+});
+
 // ---------- one-time system info ----------
 app.get('/api/static', async (req, res) => {
   try {
@@ -85,69 +237,6 @@ app.get('/api/static', async (req, res) => {
   }
 });
 
-// ---------- live stats stream (SSE) ----------
-const GPU_LIVE_FIELDS = ['utilization.gpu', 'memory.used', 'memory.total', 'temperature.gpu', 'fan.speed', 'power.draw', 'clocks.sm'];
-
-app.get('/api/live', (req, res) => {
-  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
-  res.flushHeaders();
-
-  let closed = false;
-  req.on('close', () => { closed = true; });
-  req.on('error', () => { closed = true; });
-  res.on('error', () => { closed = true; });
-
-  const send = (event, data) => {
-    if (closed || res.writableEnded || res.destroyed) return;
-    try {
-      res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-    } catch (err) {
-      closed = true;
-      logErr('sse-write', err);
-    }
-  };
-
-  const fastTick = async () => {
-    try {
-      const [load, mem, net, temp, time] = await Promise.all([
-        si.currentLoad(), si.mem(), si.networkStats(), si.cpuTemperature(), si.time(),
-      ]);
-      const activeNet = net.reduce((a, n) => ({ rx: a.rx + n.rx_sec, tx: a.tx + n.tx_sec }), { rx: 0, tx: 0 });
-      send('fast', {
-        cpu: { avg: load.currentLoad, cores: load.cpus.map(c => c.load) },
-        mem: { used: mem.active, total: mem.total, swapUsed: mem.swapused, swapTotal: mem.swaptotal },
-        net: { rx: activeNet.rx, tx: activeNet.tx },
-        temp: temp.main,
-        uptime: time.uptime,
-      });
-    } catch (err) {
-      send('error', { source: 'fast', message: err.message });
-    }
-  };
-
-  const gpuTick = async () => {
-    const g = await nvidiaQuery(GPU_LIVE_FIELDS);
-    if (g && g[0]) send('gpu', g[0]);
-  };
-
-  const diskTick = async () => {
-    try {
-      const fs = await si.fsSize();
-      send('disks', fs.filter(d => d.size > 0).map(d => ({ mount: d.mount, size: d.size, used: d.used })));
-    } catch (err) {
-      send('error', { source: 'disks', message: err.message });
-    }
-  };
-
-  fastTick();
-  gpuTick();
-  diskTick();
-  const fastTimer = setInterval(fastTick, 2000);
-  const gpuTimer = setInterval(gpuTick, 3000);
-  const diskTimer = setInterval(diskTick, 30000);
-  req.on('close', () => { clearInterval(fastTimer); clearInterval(gpuTimer); clearInterval(diskTimer); });
-});
-
 // ---------- drill-down detail endpoints ----------
 app.get('/api/detail/cpu', async (req, res) => {
   try {
@@ -165,7 +254,6 @@ app.get('/api/detail/cpu', async (req, res) => {
       brand: cpu.brand, vendor: cpu.vendor, family: cpu.family, model: cpu.model, stepping: cpu.stepping,
       baseGhz: cpu.speed, maxGhz: cpu.speedMax,
       physicalCores: cpu.physicalCores, threads: cpu.cores,
-      efficiencyCores: cpu.efficiencyCores || null, performanceCores: cpu.performanceCores || null,
       cache: cpu.cache, virtualization: cpu.virtualization,
       socket: cpu.socket || null,
       loadAvg: load.currentLoad, loadUser: load.currentLoadUser, loadSystem: load.currentLoadSystem,
@@ -190,7 +278,6 @@ app.get('/api/detail/gpu', async (req, res) => {
     'pcie.link.gen.current', 'pcie.link.gen.max', 'pcie.link.width.current',
   ]);
   if (!g) {
-    // Non-NVIDIA fallback: whatever systeminformation can see.
     const graphics = await si.graphics().catch(() => null);
     return res.json({ nvidia: false, controllers: graphics ? graphics.controllers : [] });
   }
@@ -215,7 +302,7 @@ app.get('/api/detail/memory', async (req, res) => {
 
 app.get('/api/detail/storage', async (req, res) => {
   try {
-    const [layout, fs, reliability] = await Promise.all([
+    const [layout, fsSizes, reliability] = await Promise.all([
       si.diskLayout(), si.fsSize(),
       psQuery(`try { Get-PhysicalDisk | ForEach-Object { $r = $_ | Get-StorageReliabilityCounter -ErrorAction Stop; [PSCustomObject]@{ Name = $_.FriendlyName; Health = $_.HealthStatus; TempC = $r.Temperature; Wear = $r.Wear; PowerOnHours = $r.PowerOnHours; ReadErrors = $r.ReadErrorsTotal; WriteErrors = $r.WriteErrorsTotal } } | ConvertTo-Json } catch { '"ACCESS_DENIED"' }`),
     ]);
@@ -230,7 +317,7 @@ app.get('/api/detail/storage', async (req, res) => {
           readErrors: r ? r.ReadErrors : null, writeErrors: r ? r.WriteErrors : null,
         };
       }),
-      volumes: fs.filter(v => v.size > 0).map(v => ({ mount: v.mount, fs: v.type, size: v.size, used: v.used })),
+      volumes: fsSizes.filter(v => v.size > 0).map(v => ({ mount: v.mount, fs: v.type, size: v.size, used: v.used })),
       reliabilityAvailable: !!rel,
       elevated,
     });
@@ -283,17 +370,8 @@ app.get('/api/detail/system', async (req, res) => {
 });
 
 // ---------- processes ----------
-app.get('/api/processes', async (req, res) => {
-  try {
-    const procs = await si.processes();
-    const list = procs.list
-      .filter(p => p.pid > 4)
-      .sort((a, b) => b.cpu - a.cpu)
-      .map(p => ({ pid: p.pid, name: p.name, cpu: p.cpu, memRss: p.memRss * 1024 }));
-    res.json({ all: procs.all, list });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+app.get('/api/processes', (req, res) => {
+  res.json(procCache);
 });
 
 app.post('/api/kill', (req, res) => {
@@ -315,7 +393,7 @@ let healthCache = { at: 0, data: null };
 app.get('/api/health', async (req, res) => {
   if (healthCache.data && Date.now() - healthCache.at < 30000) return res.json(healthCache.data);
   try {
-    const [physicalDisks, defender, rebootPending, fs, mem, time, battery] = await Promise.all([
+    const [physicalDisks, defender, rebootPending, fsSizes, mem, time, battery] = await Promise.all([
       psQuery('Get-PhysicalDisk | Select-Object FriendlyName,MediaType,HealthStatus | ConvertTo-Json'),
       psQuery(`Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,@{n='SigUpdated';e={$_.AntivirusSignatureLastUpdated.ToString('o')}} | ConvertTo-Json`),
       psQuery(`@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired','HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Component Based Servicing\\RebootPending') | ForEach-Object { Test-Path $_ } | Where-Object { $_ } | Measure-Object | Select-Object -ExpandProperty Count`),
@@ -325,7 +403,6 @@ app.get('/api/health', async (req, res) => {
     const checks = [];
     const add = (name, status, detail) => checks.push({ name, status, detail });
 
-    // Disk SMART health
     const disks = physicalDisks ? [].concat(physicalDisks) : [];
     if (disks.length) {
       const bad = disks.filter(d => d.HealthStatus !== 'Healthy' && d.HealthStatus !== 0);
@@ -335,18 +412,15 @@ app.get('/api/health', async (req, res) => {
       add('Drive hardware (SMART)', 'warn', 'Could not read drive health (may need admin)');
     }
 
-    // Free space per volume
-    for (const d of fs.filter(v => v.size > 0)) {
+    for (const d of fsSizes.filter(v => v.size > 0)) {
       const freePct = 100 - (d.used / d.size) * 100;
       add(`Free space on ${d.mount}`, freePct < 5 ? 'fail' : freePct < 15 ? 'warn' : 'pass',
         `${freePct.toFixed(1)}% free (${((d.size - d.used) / 1e9).toFixed(0)} GB)`);
     }
 
-    // Memory pressure
     const memPct = (mem.active / mem.total) * 100;
     add('Memory pressure', memPct > 92 ? 'fail' : memPct > 80 ? 'warn' : 'pass', `${memPct.toFixed(0)}% of RAM in use`);
 
-    // Defender
     if (defender) {
       const sigDate = new Date(defender.SigUpdated);
       const sigAgeDays = (Date.now() - sigDate.getTime()) / 86400000;
@@ -357,23 +431,19 @@ app.get('/api/health', async (req, res) => {
       add('Antivirus (Defender)', 'warn', 'Could not read Defender status');
     }
 
-    // Pending reboot
     add('Pending reboot', Number(rebootPending) > 0 ? 'warn' : 'pass',
       Number(rebootPending) > 0 ? 'Windows is waiting on a restart to finish updates' : 'No restart pending');
 
-    // Uptime
     const upDays = time.uptime / 86400;
     add('Uptime', upDays > 14 ? 'warn' : 'pass',
       upDays > 14 ? `Up ${upDays.toFixed(0)} days — a reboot wouldn't hurt` : `Up ${upDays < 1 ? (time.uptime / 3600).toFixed(1) + ' hours' : upDays.toFixed(1) + ' days'}`);
 
-    // GPU thermals (NVIDIA only)
-    const gpu = await nvidiaQuery(['temperature.gpu', 'name']);
-    if (gpu && gpu[0] && gpu[0]['temperature.gpu'] != null) {
-      const t = gpu[0]['temperature.gpu'];
-      add('GPU temperature', t > 90 ? 'fail' : t > 82 ? 'warn' : 'pass', `${gpu[0].name} at ${t}°C`);
+    const g = latest.gpu;
+    if (g && g['temperature.gpu'] != null) {
+      const t = g['temperature.gpu'];
+      add('GPU temperature', t > 90 ? 'fail' : t > 82 ? 'warn' : 'pass', `${g.name} at ${t}°C`);
     }
 
-    // Battery (laptops only)
     if (battery.hasBattery) {
       add('Battery health', battery.maxCapacity && battery.designedCapacity && battery.maxCapacity / battery.designedCapacity < 0.6 ? 'warn' : 'pass',
         battery.designedCapacity ? `${Math.round((battery.maxCapacity / battery.designedCapacity) * 100)}% of design capacity` : `${battery.percent}% charged`);
