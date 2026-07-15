@@ -2,6 +2,12 @@
 
 **A better Task Manager + PC health checker for Windows, in one dark live dashboard.**
 
+### [⬇ Download Pulse for Windows — Pulse-Setup.exe](https://github.com/datahammer81-dev/pulse/releases/latest/download/Pulse-Setup.exe)
+
+One-click installer, ~95 MB. Everything the app needs is inside — no Node.js, no
+runtimes, nothing else to install. SmartScreen may prompt once (unsigned):
+*More info → Run anyway*.
+
 Everything about your PC on one page — live CPU/GPU/memory/network/disk stats,
 a 0–100 health score, and a process manager. Click any card for a deep-dive
 panel: per-core clock speeds, GPU fan and power draw, RAM module details,
@@ -42,9 +48,10 @@ drive SMART data, and more.
 
 Grab the latest from the [Releases](../../releases) page:
 
-- **`Pulse-Setup-x.y.z.exe`** ← recommended. One-click installer: installs the
-  desktop app, creates Desktop + Start Menu shortcuts, registers an uninstaller
-  in Windows Apps, and launches when done.
+- **[`Pulse-Setup.exe`](https://github.com/datahammer81-dev/pulse/releases/latest/download/Pulse-Setup.exe)**
+  ← recommended. One-click installer: installs the desktop app, creates
+  Desktop + Start Menu shortcuts, registers an uninstaller in Windows Apps, and
+  launches when done. Fully self-contained — no other software needed.
 - **`Pulse-win32-x64.zip`** — the same desktop app without an installer. Unzip
   anywhere, run `Pulse.exe`.
 - **`Pulse.exe`** (portable) — single file. Run it and the dashboard opens in
