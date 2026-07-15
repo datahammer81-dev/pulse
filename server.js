@@ -505,58 +505,82 @@ app.get('/api/health', async (req, res) => {
     ]);
 
     const checks = [];
-    const add = (name, status, detail) => checks.push({ name, status, detail });
+    // Each check carries: name, status, a live detail line, plus `what` (what it
+    // measures, in plain English) and `rule` (the thresholds that decide the color).
+    const add = (name, status, detail, what, rule) => checks.push({ name, status, detail, what, rule });
 
     const disks = physicalDisks ? [].concat(physicalDisks) : [];
     if (disks.length) {
       const bad = disks.filter(d => d.HealthStatus !== 'Healthy' && d.HealthStatus !== 0);
       add('Drive hardware (SMART)', bad.length ? 'fail' : 'pass',
-        bad.length ? `${bad.map(d => d.FriendlyName).join(', ')} reporting problems` : `All ${disks.length} physical drives healthy`);
+        bad.length ? `${bad.map(d => d.FriendlyName).join(', ')} reporting problems` : `All ${disks.length} physical drives healthy`,
+        "Your drives' built-in SMART self-diagnostics — the early warning a disk gives when it may be failing.",
+        "Passes when every physical drive reports healthy. Fails the moment any drive reports a problem.");
     } else {
-      add('Drive hardware (SMART)', 'warn', 'Could not read drive health (may need admin)');
+      add('Drive hardware (SMART)', 'warn', 'Could not read drive health (may need admin)',
+        "Your drives' built-in SMART self-diagnostics.",
+        "Reading SMART status needs administrator rights on some systems — run Pulse as admin to enable this check.");
     }
 
     for (const d of fsSizes.filter(v => v.size > 0)) {
       const freePct = 100 - (d.used / d.size) * 100;
       add(`Free space on ${d.mount}`, freePct < 5 ? 'fail' : freePct < 15 ? 'warn' : 'pass',
-        `${freePct.toFixed(1)}% free (${((d.size - d.used) / 1e9).toFixed(0)} GB)`);
+        `${freePct.toFixed(1)}% free (${((d.size - d.used) / 1e9).toFixed(0)} GB)`,
+        `How much room is left on drive ${d.mount}. Windows and apps slow down and can misbehave when a drive is nearly full.`,
+        "Healthy above 15% free · warning at 5–15% · problem below 5%.");
     }
 
     const memPct = (mem.active / mem.total) * 100;
-    add('Memory pressure', memPct > 92 ? 'fail' : memPct > 80 ? 'warn' : 'pass', `${memPct.toFixed(0)}% of RAM in use`);
+    add('Memory pressure', memPct > 92 ? 'fail' : memPct > 80 ? 'warn' : 'pass', `${memPct.toFixed(0)}% of RAM in use`,
+      "How much of your RAM is in use right now. When it fills up, Windows falls back to the much slower page file on disk.",
+      "Healthy below 80% · warning at 80–92% · problem above 92%.");
 
     if (defender) {
       const sigDate = new Date(defender.SigUpdated);
       const sigAgeDays = (Date.now() - sigDate.getTime()) / 86400000;
       const on = defender.AntivirusEnabled && defender.RealTimeProtectionEnabled;
       add('Antivirus (Defender)', !on ? 'fail' : sigAgeDays > 7 ? 'warn' : 'pass',
-        !on ? 'Real-time protection is OFF' : `Protected, definitions ${sigAgeDays < 1 ? 'up to date' : Math.floor(sigAgeDays) + ' day(s) old'}`);
+        !on ? 'Real-time protection is OFF' : `Protected, definitions ${sigAgeDays < 1 ? 'up to date' : Math.floor(sigAgeDays) + ' day(s) old'}`,
+        "Whether Windows Defender's real-time protection is switched on and its virus definitions are current.",
+        "Healthy when protection is on and definitions are under a week old · warns if definitions are stale · fails if real-time protection is off.");
     } else {
-      add('Antivirus (Defender)', 'warn', 'Could not read Defender status');
+      add('Antivirus (Defender)', 'warn', 'Could not read Defender status',
+        "Whether Windows Defender is actively protecting this PC.",
+        "Could not be read — you may be running third-party antivirus instead, or it needs admin rights.");
     }
 
     add('Pending reboot', Number(rebootPending) > 0 ? 'warn' : 'pass',
-      Number(rebootPending) > 0 ? 'Windows is waiting on a restart to finish updates' : 'No restart pending');
+      Number(rebootPending) > 0 ? 'Windows is waiting on a restart to finish updates' : 'No restart pending',
+      "Whether Windows is holding a restart to finish installing updates.",
+      "Healthy when nothing is pending · warns when a restart is queued (updates aren't fully applied until you reboot).");
 
     const upDays = time.uptime / 86400;
     add('Uptime', upDays > 14 ? 'warn' : 'pass',
-      upDays > 14 ? `Up ${upDays.toFixed(0)} days — a reboot wouldn't hurt` : `Up ${upDays < 1 ? (time.uptime / 3600).toFixed(1) + ' hours' : upDays.toFixed(1) + ' days'}`);
+      upDays > 14 ? `Up ${upDays.toFixed(0)} days — a reboot wouldn't hurt` : `Up ${upDays < 1 ? (time.uptime / 3600).toFixed(1) + ' hours' : upDays.toFixed(1) + ' days'}`,
+      "How long since your last restart. Very long uptime lets memory leaks and small glitches accumulate.",
+      "Healthy under 14 days · warns beyond that.");
 
     const g = latest.gpu;
     if (g && g['temperature.gpu'] != null) {
       const t = g['temperature.gpu'];
-      add('GPU temperature', t > 90 ? 'fail' : t > 82 ? 'warn' : 'pass', `${g.name} at ${t}°C`);
+      add('GPU temperature', t > 90 ? 'fail' : t > 82 ? 'warn' : 'pass', `${g.name} at ${t}°C`,
+        "Your graphics card's core temperature under its current load.",
+        "Healthy below 83°C · warning at 83–90°C · problem above 90°C.");
     }
 
     // CPU temperature (only when a sensor source exposes it)
     const cpuT = lhmCpuTemp();
     if (cpuT != null) {
-      add('CPU temperature', cpuT > 95 ? 'fail' : cpuT > 85 ? 'warn' : 'pass', `CPU package at ${cpuT.toFixed(0)}°C`);
+      add('CPU temperature', cpuT > 95 ? 'fail' : cpuT > 85 ? 'warn' : 'pass', `CPU package at ${cpuT.toFixed(0)}°C`,
+        "Your processor package temperature, read from a sensor source like LibreHardwareMonitor.",
+        "Healthy below 85°C · warning at 85–95°C · problem above 95°C.");
     }
 
     if (battery.hasBattery) {
       add('Battery health', battery.maxCapacity && battery.designedCapacity && battery.maxCapacity / battery.designedCapacity < 0.6 ? 'warn' : 'pass',
-        battery.designedCapacity ? `${Math.round((battery.maxCapacity / battery.designedCapacity) * 100)}% of design capacity` : `${battery.percent}% charged`);
+        battery.designedCapacity ? `${Math.round((battery.maxCapacity / battery.designedCapacity) * 100)}% of design capacity` : `${battery.percent}% charged`,
+        "How much of your battery's original design capacity it can still hold — batteries wear down with age and charge cycles.",
+        "Warns once the battery drops below 60% of its original capacity.");
     }
 
     const score = Math.max(0, 100 - checks.reduce((s, c) => s + (c.status === 'fail' ? 25 : c.status === 'warn' ? 8 : 0), 0));

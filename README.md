@@ -23,7 +23,10 @@ drive SMART data, and more.
 
 - **Health score** (0–100) computed from live checks: drive SMART status, free
   space per volume, memory pressure, Windows Defender state, pending reboot,
-  uptime, GPU temperature, battery wear (laptops)
+  uptime, GPU/CPU temperature, battery wear (laptops). Every check explains
+  itself — the score shows its own math (−8 per warning, −25 per problem), and
+  clicking any check reveals what it measures and the exact thresholds behind
+  its color.
 - **Customizable dashboard** — your home page is a widget grid you control:
   charts, stat tiles, per-core grid, top processes… add, resize, reorder, remove.
   Pin any hardware sensor to it with one click. Layout saves automatically.

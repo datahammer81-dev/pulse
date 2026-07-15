@@ -191,13 +191,28 @@
   .core-cell b { display: block; color: var(--ink-2); font-size: 11.5px; font-weight: 700; }
   .core-cell .mini-track { margin-top: 5px; }
 
-  .checks { list-style: none; }
-  .checks li { display: flex; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--grid); align-items: baseline; font-size: 12.5px; }
-  .checks li:last-child { border-bottom: 0; }
-  .checks .icon { width: 15px; flex: none; text-align: center; font-weight: 800; font-size: 11.5px; }
-  .checks .name { color: var(--ink); font-weight: 600; min-width: 150px; }
-  .checks .detail { color: var(--ink-2); }
   .status-good { color: var(--good); } .status-warn { color: var(--warn); } .status-crit { color: var(--crit); }
+
+  /* score explainer + expandable health checks */
+  .score-note { font-size: 11.5px; color: var(--muted); line-height: 1.6; }
+  .score-note b { color: var(--ink-2); font-weight: 600; }
+  .checks { list-style: none; }
+  .check { border-bottom: 1px solid var(--grid); }
+  .check:last-child { border-bottom: 0; }
+  .check-head { display: flex; gap: 10px; align-items: baseline; padding: 7px 2px; cursor: pointer; font-size: 12.5px; }
+  .check-head:hover { background: rgba(255,255,255,0.03); }
+  .check-head .icon { width: 15px; flex: none; text-align: center; font-weight: 800; font-size: 11.5px; }
+  .check-head .name { color: var(--ink); font-weight: 600; flex: none; }
+  .check-head .detail { color: var(--ink-2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .check-head .chev { color: var(--muted); flex: none; font-size: 11px; transition: transform .18s ease; }
+  .check.open .check-head .chev { transform: rotate(180deg); }
+  .check-detail { display: none; padding: 2px 2px 10px 27px; font-size: 12px; color: var(--muted); line-height: 1.65; }
+  .check.open .check-detail { display: block; }
+  .check-detail .row { padding: 1px 0; }
+  .check-detail b { color: var(--ink-2); font-weight: 600; }
+  .check-detail .impact-pass { color: var(--good); }
+  .check-detail .impact-warn { color: var(--warn); }
+  .check-detail .impact-fail { color: var(--crit); }
 
   .ring { position: relative; width: 104px; height: 104px; flex: none; }
   .ring svg { transform: rotate(-90deg); }
@@ -549,6 +564,56 @@ const histCols = keys => fetch('/api/history').then(r => r.json()).then(hst => {
   return out;
 });
 
+/* ---------- health checks: shared score explainer + expandable list ---------- */
+const CHECK_ICON = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
+const CHECK_IMPACT = {
+  pass: ['impact-pass', 'Passing — no effect on your score.'],
+  warn: ['impact-warn', 'Counts as a warning: −8 points.'],
+  fail: ['impact-fail', 'Counts as a problem: −25 points.'],
+};
+
+// One muted line that shows exactly how the number was reached.
+function scoreExplainer(h) {
+  const warns = h.checks.filter(c => c.status === 'warn').length;
+  const fails = h.checks.filter(c => c.status === 'fail').length;
+  if (!warns && !fails) return `<b>${h.score} / 100.</b> All ${h.checks.length} checks are passing. Every check starts you at 100; a warning costs 8, a problem costs 25.`;
+  const parts = [];
+  if (fails) parts.push(`${fails} problem${fails > 1 ? 's' : ''} (−${fails * 25})`);
+  if (warns) parts.push(`${warns} warning${warns > 1 ? 's' : ''} (−${warns * 8})`);
+  return `<b>${h.score} / 100.</b> 100 − ${parts.join(' − ')} = ${h.score}. Tap any check below to see what it means.`;
+}
+
+// Renders the checks as an accordion. Collapsed = clean results; click a row for the explanation.
+function renderCheckList(container, h) {
+  if (!container || !h) return;
+  const openKeys = new Set([...container.querySelectorAll('.check.open')].map(x => x.dataset.k));
+  container.innerHTML = h.checks.map(c => {
+    const [isym, icls] = CHECK_ICON[c.status];
+    const [impCls, impTxt] = CHECK_IMPACT[c.status];
+    return `<div class="check" data-k="${esc(c.name)}">
+      <div class="check-head">
+        <span class="icon ${icls}">${isym}</span>
+        <span class="name">${esc(c.name)}</span>
+        <span class="detail">${esc(c.detail)}</span>
+        <span class="chev">⌄</span>
+      </div>
+      <div class="check-detail">
+        ${c.what ? `<div class="row"><b>What it checks:</b> ${esc(c.what)}</div>` : ''}
+        ${c.rule ? `<div class="row"><b>Healthy when:</b> ${esc(c.rule)}</div>` : ''}
+        <div class="row"><b>Right now:</b> ${esc(c.detail)} · <span class="${impCls}">${impTxt}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+  container.querySelectorAll('.check').forEach(el => { if (openKeys.has(el.dataset.k)) el.classList.add('open'); });
+  if (!container._wired) {
+    container._wired = true;
+    container.addEventListener('click', e => {
+      const head = e.target.closest('.check-head');
+      if (head) head.parentElement.classList.toggle('open');
+    });
+  }
+}
+
 /* ---------- page framework ---------- */
 const PAGES = [
   { id: 'dashboard', label: 'Dashboard', glyph: '⌂' },
@@ -607,17 +672,18 @@ pages.overview = {
       ${statBlock('ov-net', 'Network')}
     </div>
     ${chartPanel('ov-chart', 'System load', 240, 'last 30 minutes · hover to scrub')}
-    <div class="grid" style="grid-template-columns: 5fr 4fr 5fr; margin-top:14px">
-      <div class="panel"><h2>Health</h2>
-        <div style="display:flex;gap:16px;align-items:center">
-          <div class="ring"><svg width="104" height="104" viewBox="0 0 104 104">
-            <circle cx="52" cy="52" r="44" fill="none" stroke="var(--grid)" stroke-width="8"/>
-            <circle id="ov-ring" cx="52" cy="52" r="44" fill="none" stroke="var(--good)" stroke-width="8"
-              stroke-linecap="butt" stroke-dasharray="276.5 276.5" stroke-dashoffset="276.5" style="transition: stroke-dashoffset 1s ease, stroke .5s"/>
-          </svg><div class="val"><b id="ov-score">–</b><span>/100</span></div></div>
-          <div style="min-width:0;flex:1"><ul class="checks" id="ov-checks"></ul></div>
-        </div>
+    <div class="panel" style="margin-top:14px"><h2>System health <span class="aside" id="ov-health-word"></span></h2>
+      <div style="display:flex;gap:18px;align-items:center;margin-bottom:6px">
+        <div class="ring"><svg width="104" height="104" viewBox="0 0 104 104">
+          <circle cx="52" cy="52" r="44" fill="none" stroke="var(--grid)" stroke-width="8"/>
+          <circle id="ov-ring" cx="52" cy="52" r="44" fill="none" stroke="var(--good)" stroke-width="8"
+            stroke-linecap="butt" stroke-dasharray="276.5 276.5" stroke-dashoffset="276.5" style="transition: stroke-dashoffset 1s ease, stroke .5s"/>
+        </svg><div class="val"><b id="ov-score">–</b><span>/100</span></div></div>
+        <div class="score-note" id="ov-score-note" style="flex:1"></div>
       </div>
+      <div class="checks" id="ov-checks"></div>
+    </div>
+    <div class="grid" style="grid-template-columns: 1fr 1fr; margin-top:14px">
       <div class="panel"><h2>Storage</h2><div id="ov-disks"><div class="note">Loading…</div></div></div>
       <div class="panel"><h2>Top processes <span class="aside">by CPU</span></h2><table><tbody id="ov-procs"></tbody></table></div>
     </div>`,
@@ -649,14 +715,14 @@ pages.overview = {
     const renderHealth = h => {
       if (!h) return;
       const color = h.score >= 90 ? 'var(--good)' : h.score >= 70 ? 'var(--warn)' : 'var(--crit)';
+      const word = h.score >= 90 ? 'Healthy' : h.score >= 70 ? 'Fair' : 'Needs attention';
       $('ov-ring').style.stroke = color;
       $('ov-ring').style.strokeDashoffset = 276.5 - (h.score / 100) * 276.5;
       $('ov-score').textContent = h.score;
-      const icon = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
-      const bad = h.checks.filter(c => c.status !== 'pass');
-      $('ov-checks').innerHTML = (bad.length ? bad : [{ status: 'pass', name: `All ${h.checks.length} checks passed`, detail: '' }])
-        .slice(0, 5).map(c => `<li><span class="icon ${icon[c.status][1]}">${icon[c.status][0]}</span>
-          <span class="name" style="min-width:0">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`).join('');
+      const w = $('ov-health-word');
+      if (w) { w.textContent = word; w.style.color = color; }
+      $('ov-score-note').innerHTML = scoreExplainer(h);
+      renderCheckList($('ov-checks'), h);
     };
     renderHealth(healthData);
     onBus('health', e => renderHealth(e.detail));
@@ -1131,12 +1197,9 @@ const WIDGETS = {
     onBus('disks', e => render(e.detail));
   }},
   'checks': { name: 'Health checks list', title: () => 'Health checks', mount(el) {
-    const icon = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
-    const render = h => {
-      if (!h) return;
-      el.innerHTML = '<ul class="checks">' + h.checks.map(c =>
-        `<li><span class="icon ${icon[c.status][1]}">${icon[c.status][0]}</span><span class="name" style="min-width:0">${esc(c.name)}</span><span class="detail">${esc(c.detail)}</span></li>`).join('') + '</ul>';
-    };
+    el.innerHTML = '<div class="score-note" id="wg-checks-note" style="margin-bottom:8px"></div><div class="checks" id="wg-checks-list"></div>';
+    const note = el.querySelector('#wg-checks-note'), list = el.querySelector('#wg-checks-list');
+    const render = h => { if (!h) return; note.innerHTML = scoreExplainer(h); renderCheckList(list, h); };
     render(healthData);
     onBus('health', e => render(e.detail));
   }},
