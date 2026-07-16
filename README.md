@@ -30,11 +30,13 @@ drive SMART data, and more.
 - **Customizable dashboard** — your home page is a widget grid you control:
   charts, stat tiles, per-core grid, top processes… add, resize, reorder, remove.
   Pin any hardware sensor to it with one click. Layout saves automatically.
-- **Deep sensors via LibreHardwareMonitor** (optional) — run the free, open-source
-  [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
-  with its HTTP server on and Pulse auto-detects it: CPU package/core temps, every
-  fan RPM, voltages, power draw, board/VRM temps — all pinnable, all with 30-min
-  history. Without it, Pulse still works with everything Windows exposes natively.
+- **Built-in sensor engine** — the installed app bundles its own sensor engine
+  (powered by [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
+  MPL-2.0): GPU temps/fans/power work out of the box, and running Pulse as
+  administrator unlocks the motherboard chip — CPU package/core temps, every fan
+  RPM, voltages, board/VRM temps. All pinnable, all with 30-min history. An
+  external LibreHardwareMonitor (HTTP server on port 8085) still works as a
+  fallback source, e.g. for the portable build.
 - **Gaming-HUD interface** — dark corner-cut panels, sidebar navigation, animated
   live numbers, one page per subsystem
 - **30-minute history on every chart** — recorded server-side even while you're
@@ -124,4 +126,8 @@ temperature, wear and power-on hours.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). The bundled sensor engine (`sensors-helper/`) embeds
+[LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
+© LibreHardwareMonitor contributors, used unmodified under the
+[MPL-2.0](https://www.mozilla.org/en-US/MPL/2.0/) license — its source is
+available at the link above.

@@ -1,16 +1,17 @@
 {
   "name": "pulse",
   "productName": "Pulse",
-  "version": "2.2.4",
+  "version": "2.3.0",
   "description": "Pulse — live PC health dashboard and task manager for Windows. Streams CPU/memory/network/disk stats, runs health checks, and can end processes.",
   "author": "Trevor",
   "main": "electron-main.js",
   "scripts": {
     "start": "node server.js",
     "app": "electron .",
+    "build:sensors": "dotnet publish sensors-helper -c Release -o dist/sensors",
     "build:app": "node scripts/build-app.js",
     "build:exe": "node scripts/build-exe.js",
-    "build:installer": "node scripts/make-icon.js && electron-builder --win nsis"
+    "build:installer": "node scripts/make-icon.js && npm run build:sensors && electron-builder --win nsis"
   },
   "license": "MIT",
   "type": "commonjs",
@@ -38,6 +39,12 @@
     "directories": {
       "output": "dist/installer"
     },
+    "extraResources": [
+      {
+        "from": "dist/sensors/PulseSensors.exe",
+        "to": "sensors/PulseSensors.exe"
+      }
+    ],
     "win": {
       "target": "nsis",
       "icon": "dist/pulse.ico"

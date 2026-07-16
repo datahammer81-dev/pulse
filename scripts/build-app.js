@@ -1,5 +1,6 @@
 // Packages the Electron desktop app → dist/app/Pulse-win32-x64/Pulse.exe
 const path = require('path');
+const fs = require('fs');
 const { execSync } = require('child_process');
 const packagerModule = require('@electron/packager');
 const pack = packagerModule.packager || packagerModule;
@@ -34,5 +35,16 @@ const root = path.join(__dirname, '..');
       CompanyName: 'Trevor',
     },
   });
+  // Bundle the sensor engine next to the app's resources (same spot the installer uses).
+  const helper = path.join(root, 'dist', 'sensors', 'PulseSensors.exe');
+  if (fs.existsSync(helper)) {
+    const dest = path.join(paths[0], 'resources', 'sensors');
+    fs.mkdirSync(dest, { recursive: true });
+    fs.copyFileSync(helper, path.join(dest, 'PulseSensors.exe'));
+    console.log('    bundled sensor engine');
+  } else {
+    console.warn('    dist/sensors/PulseSensors.exe missing — run `npm run build:sensors` first');
+  }
+
   console.log('\nDone →', path.join(paths[0], 'Pulse.exe'));
 })().catch(err => { console.error(err); process.exit(1); });

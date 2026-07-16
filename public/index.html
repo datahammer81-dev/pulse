@@ -1406,23 +1406,33 @@ pages.sensors = {
   mount() {
     let built = false, lastIds = '';
     const root = $('sn-root');
+    let meta = { builtinPresent: true };
+    const elevatedNow = () => live.staticInfo && live.staticInfo.elevated;
     const render = d => {
       if (!d) return;
       if (!d.available) {
         built = false; lastIds = '';
-        root.innerHTML = `<div class="panel" style="max-width:640px">
-          <h2>Unlock every sensor on this machine</h2>
-          <p class="note" style="font-size:12.5px;margin-bottom:4px">Windows doesn't expose CPU temperatures, fan RPMs, voltages or board temps
-          without a sensor driver. The free, open-source <b style="color:var(--ink)">LibreHardwareMonitor</b> provides one — run it and
-          this page (plus CPU temps everywhere in Pulse) lights up automatically.</p>
+        // Built-in engine ships with the installed app; it boots in a few seconds.
+        // Only the portable build (no bundled engine) needs the external-LHM route.
+        const starting = meta.builtinPresent
+          ? `<div class="panel" style="max-width:640px;margin-bottom:14px"><h2>Built-in sensor engine starting…</h2>
+             <p class="note" style="font-size:12.5px">Pulse bundles its own sensor engine — this page fills in by itself within a few seconds.
+             ${elevatedNow() ? '' : `If motherboard sensors (fans, voltages, CPU temp) stay hidden,
+             <span class="elevate" style="cursor:pointer;text-decoration:underline;color:var(--warn)" onclick="offerElevation('The hardware driver that reads motherboard sensors needs it.')">restart Pulse as administrator</span>.`}</p></div>`
+          : '';
+        const lhmGuide = `<div class="panel" style="max-width:640px">
+          <h2>${meta.builtinPresent ? 'Alternative: LibreHardwareMonitor' : 'Unlock every sensor on this machine'}</h2>
+          <p class="note" style="font-size:12.5px;margin-bottom:4px">${meta.builtinPresent
+            ? 'You can also feed Pulse from an external LibreHardwareMonitor if you already run it:'
+            : 'This portable build has no bundled sensor engine. Run the free, open-source <b style="color:var(--ink)">LibreHardwareMonitor</b> and this page lights up automatically:'}</p>
           <ol class="guide-steps">
             <li>Download LibreHardwareMonitor from the official <a href="https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases/latest" target="_blank" rel="noopener">GitHub releases page</a> and unzip it.</li>
             <li>Run <b style="color:var(--ink)">LibreHardwareMonitor.exe</b> (let it install its driver if asked).</li>
             <li>In its menu bar turn on <b style="color:var(--ink)">Options → HTTP Server → Run</b> (keep the default port 8085).</li>
-            <li>Done — Pulse checks every few seconds and this page fills in on its own. Keep LHM running in the tray.</li>
           </ol>
-          <p class="note">Pulse only reads LHM's local data feed on this PC — nothing leaves your machine.</p>
+          <p class="note">Everything stays on this PC — nothing leaves your machine.</p>
         </div>`;
+        root.innerHTML = starting + lhmGuide;
         return;
       }
       const ids = d.sensors.map(s => s.id).join(',');
@@ -1434,9 +1444,14 @@ pages.sensors = {
           if (!groups.has(key)) groups.set(key, []);
           groups.get(key).push(s);
         }
-        let html = `<div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
+        const srcLabel = d.source === 'builtin' ? 'built-in engine' : 'LibreHardwareMonitor';
+        const moreHint = d.source === 'builtin' && !elevatedNow()
+          ? `<span class="note" style="color:var(--warn)">· motherboard sensors hidden —
+             <span class="elevate" style="cursor:pointer;text-decoration:underline" onclick="offerElevation('The hardware driver that reads fans, voltages and CPU temps needs it.')">restart as admin to unlock</span></span>`
+          : '';
+        let html = `<div style="display:flex;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
           <input id="sn-search" type="search" placeholder="Filter sensors…">
-          <span class="note">${d.sensors.length} sensors · hover a tile to pin it to your Dashboard</span></div>`;
+          <span class="note">${d.sensors.length} sensors via ${srcLabel} · hover a tile to pin it to your Dashboard</span>${moreHint}</div>`;
         let currentHw = '';
         for (const [key, list] of groups) {
           const [hw, cat] = key.split('¦');
@@ -1463,7 +1478,10 @@ pages.sensors = {
         }
       }
     };
-    if (live.sensors) render(live.sensors); else fetch('/api/sensors').then(r => r.json()).then(render);
+    fetch('/api/sensors').then(r => r.json()).then(d => {
+      meta.builtinPresent = !!d.builtinPresent;
+      render(live.sensors || d);
+    }).catch(() => { if (live.sensors) render(live.sensors); });
     onBus('sensors', e => render(e.detail));
   },
 };

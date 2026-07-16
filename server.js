@@ -2,7 +2,7 @@
 // and streams live updates over SSE.
 const express = require('express');
 const path = require('path');
-const { execFile, exec } = require('child_process');
+const { execFile, exec, spawn } = require('child_process');
 const si = require('systeminformation');
 
 // When packaged as a single .exe (node:sea), the UI is embedded as an asset.
@@ -168,13 +168,78 @@ async function procTick() {
   }
 }
 
-// ---------- LibreHardwareMonitor bridge (optional deep sensors) ----------
-// If LHM is running with its HTTP server enabled (default port 8085), Pulse
-// picks up CPU temps, fan RPMs, voltages, power and board temps automatically.
+// ---------- deep sensors ----------
+// Primary source: PulseSensors.exe, our bundled sensor engine (embeds
+// LibreHardwareMonitorLib, MPL-2.0). Fallback: an external LibreHardwareMonitor
+// with its HTTP server enabled (default port 8085).
 const LHM_URL = 'http://127.0.0.1:8085/data.json';
-let lhm = { available: false, sensors: [], at: 0 };
+let lhm = { available: false, sensors: [], at: 0, source: null };
 const sensorHist = new Map(); // id → {t[], v[]}
 const SENSOR_HIST_LEN = 360;  // 30 min of 5s samples
+
+function ingestSensors(sensors, source) {
+  const now = Date.now();
+  lhm = { available: true, sensors, at: now, source };
+  for (const s of sensors) {
+    if (s.value == null) continue;
+    let h = sensorHist.get(s.id);
+    if (!h) { h = { t: [], v: [] }; sensorHist.set(s.id, h); }
+    h.t.push(now); h.v.push(s.value);
+    if (h.t.length > SENSOR_HIST_LEN) { h.t.shift(); h.v.shift(); }
+  }
+  broadcast('sensors', { available: true, sensors, source });
+}
+
+// ----- built-in engine (spawned helper, dies with us via its stdin pipe) -----
+function sensorHelperPath() {
+  const candidates = [
+    process.resourcesPath ? path.join(process.resourcesPath, 'sensors', 'PulseSensors.exe') : null,
+    path.join(__dirname, 'dist', 'sensors', 'PulseSensors.exe'),
+  ].filter(Boolean);
+  for (const c of candidates) { try { if (fs.existsSync(c)) return c; } catch {} }
+  return null;
+}
+
+let helperProc = null, helperRetries = 0;
+function startSensorHelper() {
+  const exe = sensorHelperPath();
+  if (!exe || helperProc) return;
+  try {
+    helperProc = spawn(exe, ['3000'], { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+  } catch (err) {
+    logErr('sensor-helper-spawn', err);
+    helperProc = null;
+    return;
+  }
+  let buf = '';
+  helperProc.stdout.on('data', chunk => {
+    buf += chunk;
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      try {
+        const d = JSON.parse(line);
+        if (d.available && Array.isArray(d.sensors)) { ingestSensors(d.sensors, 'builtin'); helperRetries = 0; }
+        else if (d.error) logErr('sensor-helper', d.error);
+      } catch (err) {
+        logErr('sensor-helper-parse', err);
+      }
+    }
+  });
+  helperProc.on('error', err => { logErr('sensor-helper', err); });
+  helperProc.on('exit', code => {
+    helperProc = null;
+    if (lhm.source === 'builtin') {
+      lhm = { available: false, sensors: [], at: Date.now(), source: null };
+      broadcast('sensors', lhm);
+    }
+    if (helperRetries++ < 3) setTimeout(startSensorHelper, 5000);
+    else logErr('sensor-helper', `exited repeatedly (last code ${code}), giving up`);
+  });
+}
+startSensorHelper();
 
 function parseLhmValue(s) {
   if (typeof s !== 'string') return null;
@@ -206,24 +271,18 @@ function lhmCpuTemp() {
 }
 
 async function lhmTick() {
+  if (helperProc) return; // built-in engine is the source; external LHM is fallback only
   try {
     const res = await fetch(LHM_URL, { signal: AbortSignal.timeout(2500) });
     const tree = await res.json();
     const out = [];
     flattenLhm(tree, [], out);
-    const now = Date.now();
-    lhm = { available: true, sensors: out, at: now };
-    for (const s of out) {
-      if (s.value == null) continue;
-      let h = sensorHist.get(s.id);
-      if (!h) { h = { t: [], v: [] }; sensorHist.set(s.id, h); }
-      h.t.push(now); h.v.push(s.value);
-      if (h.t.length > SENSOR_HIST_LEN) { h.t.shift(); h.v.shift(); }
-    }
-    broadcast('sensors', { available: true, sensors: out });
+    ingestSensors(out, 'lhm');
   } catch {
-    if (lhm.available) broadcast('sensors', { available: false, sensors: [] });
-    lhm = { available: false, sensors: [], at: Date.now() };
+    if (lhm.available && lhm.source === 'lhm') {
+      lhm = { available: false, sensors: [], at: Date.now(), source: null };
+      broadcast('sensors', lhm);
+    }
   }
 }
 
@@ -235,7 +294,7 @@ setInterval(() => {
 }, 2500);
 lhmTick();
 
-app.get('/api/sensors', (req, res) => res.json(lhm));
+app.get('/api/sensors', (req, res) => res.json({ ...lhm, elevated, builtinPresent: !!sensorHelperPath() }));
 app.get('/api/sensorhistory', (req, res) => {
   const h = sensorHist.get(String(req.query.id || ''));
   res.json(h ? { t: h.t, v: h.v } : { t: [], v: [] });
@@ -267,7 +326,7 @@ app.get('/api/live', (req, res) => {
   if (latest.fast) send('fast', latest.fast);
   if (latest.gpu) send('gpu', latest.gpu);
   if (latest.disks) send('disks', latest.disks);
-  send('sensors', { available: lhm.available, sensors: lhm.sensors });
+  send('sensors', { available: lhm.available, sensors: lhm.sensors, source: lhm.source });
 
   const drop = () => { closed = true; sseClients.delete(send); };
   req.on('close', drop);
