@@ -524,21 +524,35 @@ class TimeChart {
 const bus = new EventTarget();
 const live = { fast: null, gpu: null, disks: null, sensors: null, staticInfo: null };
 
-const es = new EventSource('/api/live');
-es.onopen = () => {
-  $('live-dot').classList.add('on'); $('live-label').textContent = 'live';
-  loadStatic(); // after an elevated relaunch the admin badge and sensors change
-};
-es.onerror = () => { $('live-dot').classList.remove('on'); $('live-label').textContent = 'reconnecting'; };
-for (const ev of ['fast', 'gpu', 'disks', 'sensors']) {
-  es.addEventListener(ev, e => {
-    live[ev] = JSON.parse(e.data);
-    if (ev === 'fast') {
-      $('uptime-chip').innerHTML = `UP <b>${fmtUp(live.fast.uptime)}</b>`;
-    }
-    bus.dispatchEvent(new CustomEvent(ev, { detail: live[ev] }));
-  });
+// The live stream is dropped whenever this window is hidden (minimized / closed to
+// tray), so a background dashboard costs nothing and the server drops to low-power.
+let es = null;
+function connectSSE() {
+  if (es) return;
+  es = new EventSource('/api/live');
+  es.onopen = () => {
+    $('live-dot').classList.add('on'); $('live-label').textContent = 'live';
+    loadStatic(); // after an elevated relaunch the admin badge and sensors change
+  };
+  es.onerror = () => { $('live-dot').classList.remove('on'); $('live-label').textContent = 'reconnecting'; };
+  for (const ev of ['fast', 'gpu', 'disks', 'sensors']) {
+    es.addEventListener(ev, e => {
+      live[ev] = JSON.parse(e.data);
+      if (ev === 'fast') $('uptime-chip').innerHTML = `UP <b>${fmtUp(live.fast.uptime)}</b>`;
+      bus.dispatchEvent(new CustomEvent(ev, { detail: live[ev] }));
+    });
+  }
 }
+function disconnectSSE() {
+  if (!es) return;
+  es.close(); es = null;
+  $('live-dot').classList.remove('on'); $('live-label').textContent = 'paused';
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) disconnectSSE();
+  else { connectSSE(); if (typeof renderPage === 'function') { /* refresh current page data on return */ } }
+});
+if (!document.hidden) connectSSE();
 
 function loadStatic() {
   fetch('/api/static').then(r => r.json()).then(s => {
@@ -652,7 +666,8 @@ let current = { id: null, cleanup: [] };
 // (intervals + listeners cleaned) without tearing down the whole page.
 let activeScope = null;
 function onCleanup(fn) { (activeScope || current.cleanup).push(fn); }
-function every(ms, fn) { fn(); const id = setInterval(fn, ms); onCleanup(() => clearInterval(id)); }
+// Page polls skip while the window is hidden — no fetches or DOM work in the tray.
+function every(ms, fn) { const run = () => { if (!document.hidden) fn(); }; run(); const id = setInterval(run, ms); onCleanup(() => clearInterval(id)); }
 function onBus(ev, fn) { bus.addEventListener(ev, fn); onCleanup(() => bus.removeEventListener(ev, fn)); }
 
 function renderPage() {

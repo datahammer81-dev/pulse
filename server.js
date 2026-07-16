@@ -84,6 +84,12 @@ function pushHist(p) {
 
 const latest = { fast: null, gpu: null, disks: null };
 const sseClients = new Set();
+// Power modes cut collection work when nobody's actively watching the dashboard.
+// 'active' = a dashboard window/tab is connected · 'idle' = only the mini overlay
+// · 'sleep' = no viewers at all. The recorder keeps running in every mode.
+let dashboardClients = 0;
+let lastProcNeed = 0; // last time a client asked for process data
+const powerMode = () => dashboardClients > 0 ? 'active' : sseClients.size > 0 ? 'idle' : 'sleep';
 function broadcast(event, data) {
   for (const send of sseClients) send(event, data);
 }
@@ -152,6 +158,9 @@ const procHist = new Map(); // pid → {name, lastSeen, t[], cpu[], mem[]}
 let procCache = { all: 0, list: [] };
 
 async function procTick() {
+  // si.processes() enumerates every process — the heaviest call we make. Only do
+  // it when a process-viewing surface asked for data in the last 15s.
+  if (Date.now() - lastProcNeed > 15000) return;
   try {
     const procs = await si.processes();
     const list = procs.list
@@ -404,11 +413,27 @@ app.post('/api/events/clear', (req, res) => {
   res.json({ ok: true });
 });
 
-setInterval(fastTick, TICK_MS);
-setInterval(gpuTick, 3000);
+// Collection cadence scales with who's watching. The recorder still samples in
+// every mode (5s in sleep is plenty to catch a sustained hot/maxed episode).
+const RATES = {
+  fast: { active: 2000, idle: 3000, sleep: 5000 },
+  gpu: { active: 3000, idle: 4000, sleep: 8000 },
+  proc: { active: 5000, idle: 15000, sleep: 30000 },
+};
+function powerLoop(kind, fn) {
+  const run = async () => {
+    try { await fn(); } catch (err) { logErr(kind + 'Loop', err); }
+    setTimeout(run, RATES[kind][powerMode()]);
+  };
+  run();
+}
+powerLoop('fast', fastTick);
+powerLoop('gpu', gpuTick);
+powerLoop('proc', procTick);
 setInterval(diskTick, 30000);
-setInterval(procTick, PROC_MS);
-fastTick(); gpuTick(); diskTick(); procTick();
+diskTick();
+
+app.get('/api/power', (req, res) => res.json({ mode: powerMode(), dashboardClients, totalClients: sseClients.size }));
 
 // ---------- live stream (SSE) ----------
 app.get('/api/live', (req, res) => {
@@ -426,13 +451,15 @@ app.get('/api/live', (req, res) => {
       logErr('sse-write', err);
     }
   };
+  const isOverlay = req.query.c === 'overlay';
   sseClients.add(send);
+  if (!isOverlay) dashboardClients++;
   if (latest.fast) send('fast', latest.fast);
   if (latest.gpu) send('gpu', latest.gpu);
   if (latest.disks) send('disks', latest.disks);
   send('sensors', { available: lhm.available, sensors: lhm.sensors, source: lhm.source });
 
-  const drop = () => { closed = true; sseClients.delete(send); };
+  const drop = () => { if (closed) return; closed = true; sseClients.delete(send); if (!isOverlay) dashboardClients = Math.max(0, dashboardClients - 1); };
   req.on('close', drop);
   req.on('error', drop);
   res.on('error', drop);
@@ -444,6 +471,7 @@ app.get('/api/history', (req, res) => {
 });
 
 app.get('/api/prochistory', (req, res) => {
+  lastProcNeed = Date.now();
   const ranked = [...procHist.entries()]
     .map(([pid, h]) => {
       const recent = h.cpu.slice(-24); // last ~2 minutes
@@ -614,6 +642,7 @@ app.get('/api/detail/system', async (req, res) => {
 
 // ---------- processes ----------
 app.get('/api/processes', (req, res) => {
+  lastProcNeed = Date.now();
   res.json(procCache);
 });
 

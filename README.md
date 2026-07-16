@@ -29,7 +29,10 @@ drive SMART data, and more.
   its color.
 - **Runs in the background** — lives in the system tray; closing the window keeps
   it monitoring. A **mini overlay** (toggle from the tray) pins live CPU/GPU/RAM
-  and temps to the bottom-right corner, above the taskbar.
+  and temps to the bottom-right corner, above the taskbar. Pulse is
+  **power-aware**: when its window is hidden it drops the live stream and slows
+  collection, and it only enumerates all processes while you're viewing them —
+  so a backgrounded Pulse costs almost nothing.
 - **Flight recorder** — records peaks and stress episodes (hot temps, sustained
   max load, memory pressure) in the background, even while a fullscreen game hides
   the app, so you can look back on the **Events** page and see what ran hot or

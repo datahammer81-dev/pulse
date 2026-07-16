@@ -64,7 +64,7 @@
     worst = 'good';
   }
 
-  const es = new EventSource('/api/live');
+  const es = new EventSource('/api/live?c=overlay');
   es.onopen = () => $('dot').classList.add('on');
   es.onerror = () => $('dot').classList.remove('on');
 
