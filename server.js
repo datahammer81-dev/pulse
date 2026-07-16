@@ -23,7 +23,7 @@ const logErr = (tag, err) => {
 process.on('uncaughtException', err => logErr('uncaughtException', err));
 process.on('unhandledRejection', err => logErr('unhandledRejection', err));
 
-const PORT = 7377;
+const PORT = Number(process.argv[2]) || Number(process.env.PULSE_PORT) || 7377;
 const app = express();
 app.use(express.json());
 if (isExe) {

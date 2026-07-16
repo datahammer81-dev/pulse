@@ -250,13 +250,24 @@
   }
   .hud-btn.ghost { background: var(--panel); border: 1px solid var(--baseline); color: var(--ink-2); }
   .hud-btn:hover { filter: brightness(1.15); }
-  .wctl { display: inline-flex; gap: 4px; }
+  .wctl { display: none; gap: 4px; align-items: center; }
   .wctl button {
     background: var(--panel-2); border: 1px solid var(--baseline); color: var(--muted);
     width: 22px; height: 20px; cursor: pointer; font-size: 10px; padding: 0;
   }
   .wctl button:hover { color: var(--ink); border-color: var(--muted); }
   .wctl button.x:hover { color: var(--crit); border-color: var(--crit); }
+  .wctl .grip { cursor: grab; color: var(--muted); font-size: 13px; padding: 0 4px; user-select: none; }
+  .wctl .grip:hover { color: var(--ink); }
+
+  /* dashboard: dense packing fills every row edge-to-edge; edit mode is class-toggled */
+  #dash-grid { grid-auto-flow: dense; }
+  #dash-addbar { display: none; margin-bottom: 14px; }
+  #dash-root.editing #dash-addbar { display: block; }
+  #dash-root.editing .wctl { display: inline-flex; }
+  #dash-root.editing #dash-grid .panel { cursor: grab; }
+  #dash-root.editing #dash-grid .panel:hover { border-color: var(--muted); }
+  #dash-grid .panel.dragging { opacity: .4; cursor: grabbing; }
   select {
     background: var(--panel-2); color: var(--ink); border: 1px solid var(--baseline);
     padding: 6px 9px; font-size: 12px; outline: none; max-width: 320px;
@@ -558,11 +569,13 @@ pollHealth();
 setInterval(pollHealth, 30000);
 $('health-chip').addEventListener('click', () => { location.hash = '#/overview'; });
 
-const histCols = keys => fetch('/api/history').then(r => r.json()).then(hst => {
-  const out = { t: hst.t };
-  for (const k of keys) out[k] = hst[k];
-  return out;
-});
+// Short-lived cache so page switches paint charts instantly instead of refetching.
+let histCache = { at: 0, data: null };
+const histCols = keys => {
+  const pick = h => { const out = { t: h.t }; for (const k of keys) out[k] = h[k]; return out; };
+  if (histCache.data && Date.now() - histCache.at < 4000) return Promise.resolve(pick(histCache.data));
+  return fetch('/api/history').then(r => r.json()).then(h => { histCache = { at: Date.now(), data: h }; return pick(h); });
+};
 
 /* ---------- health checks: shared score explainer + expandable list ---------- */
 const CHECK_ICON = { pass: ['✓', 'status-good'], warn: ['!', 'status-warn'], fail: ['✕', 'status-crit'] };
@@ -634,7 +647,10 @@ $('nav').addEventListener('click', e => {
 });
 
 let current = { id: null, cleanup: [] };
-function onCleanup(fn) { current.cleanup.push(fn); }
+// Widgets mount inside their own scope so a single widget can be removed
+// (intervals + listeners cleaned) without tearing down the whole page.
+let activeScope = null;
+function onCleanup(fn) { (activeScope || current.cleanup).push(fn); }
 function every(ms, fn) { fn(); const id = setInterval(fn, ms); onCleanup(() => clearInterval(id)); }
 function onBus(ev, fn) { bus.addEventListener(ev, fn); onCleanup(() => bus.removeEventListener(ev, fn)); }
 
@@ -1226,55 +1242,124 @@ const WIDGETS = {
   }},
 };
 
+// The dashboard edits itself in place — no full re-renders. Entering edit mode
+// only toggles a class; add/resize/remove/drag manipulate the grid directly.
 pages.dashboard = {
-  html: () => {
-    const cfg = dashLoad();
-    const bar = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-      <span class="note">${dashEditing ? 'Editing — move ◀▶, resize ⬍, remove ✕, or add widgets below.' : ''}</span>
-      <button class="hud-btn${dashEditing ? '' : ' ghost'}" id="dash-edit">${dashEditing ? '✓ Done' : '✎ Customize'}</button></div>`;
-    const addbar = !dashEditing ? '' : `<div class="panel" style="margin-bottom:14px"><h2>Add widget</h2>
+  html: () => `<div id="dash-root">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <span class="note" id="dash-hint"></span>
+      <button class="hud-btn ghost" id="dash-edit">✎ Customize</button>
+    </div>
+    <div class="panel" id="dash-addbar"><h2>Add widget</h2>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <select id="add-type">${Object.entries(WIDGETS).map(([k, w]) => `<option value="${k}">${esc(w.name)}</option>`).join('')}</select>
         <select id="add-sensor" style="display:none"><option>loading sensors…</option></select>
         <button class="hud-btn" id="add-go">+ Add</button>
         <button class="hud-btn ghost" id="dash-reset">Reset layout</button>
-      </div></div>`;
-    const grid = `<div class="grid">` + cfg.map((c, i) => {
-      const w = WIDGETS[c.w];
-      if (!w) return '';
-      const ctl = !dashEditing ? '' : `<span class="wctl">
-        <button data-i="${i}" data-act="left" title="Move left">◀</button>
-        <button data-i="${i}" data-act="size" title="Resize">⬍</button>
-        <button data-i="${i}" data-act="right" title="Move right">▶</button>
-        <button data-i="${i}" data-act="x" class="x" title="Remove">✕</button></span>`;
-      return `<div class="panel span${c.size}"><h2>${esc(w.title(c))}${ctl}</h2><div id="wg-${i}"></div></div>`;
-    }).join('') + `</div>`;
-    return bar + addbar + grid;
-  },
+      </div></div>
+    <div class="grid" id="dash-grid"></div>
+  </div>`,
   mount() {
-    const cfg = dashLoad();
-    cfg.forEach((c, i) => {
-      const w = WIDGETS[c.w], el = $('wg-' + i);
-      if (w && el) w.mount(el, c);
-    });
-    $('dash-edit').addEventListener('click', () => { dashEditing = !dashEditing; renderPage(); });
-    if (!dashEditing) return;
+    let uidSeq = 0;
+    const entries = dashLoad().filter(c => WIDGETS[c.w]).map(c => ({ uid: 'u' + (uidSeq++), cfg: c }));
+    const scopes = new Map();
+    const grid = $('dash-grid'), root = $('dash-root');
 
-    $('page').addEventListener('click', e => {
-      const b = e.target.closest('.wctl button');
-      if (!b) return;
-      const i = Number(b.dataset.i), c = dashLoad();
-      if (b.dataset.act === 'x') c.splice(i, 1);
-      if (b.dataset.act === 'size') c[i].size = c[i].size === 3 ? 6 : c[i].size === 6 ? 12 : 3;
-      if (b.dataset.act === 'left' && i > 0) [c[i - 1], c[i]] = [c[i], c[i - 1]];
-      if (b.dataset.act === 'right' && i < c.length - 1) [c[i + 1], c[i]] = [c[i], c[i + 1]];
-      dashSave(c);
-      renderPage();
-    });
-    $('dash-reset').addEventListener('click', () => { dashSave(DASH_DEFAULT.map(x => ({ ...x }))); renderPage(); });
+    const persist = () => {
+      const order = [...grid.children].map(el => el.dataset.uid);
+      entries.sort((a, b) => order.indexOf(a.uid) - order.indexOf(b.uid));
+      dashSave(entries.map(e => e.cfg));
+    };
 
+    const mountEntry = entry => {
+      const w = WIDGETS[entry.cfg.w];
+      const el = document.createElement('div');
+      el.className = 'panel span' + entry.cfg.size;
+      el.dataset.uid = entry.uid;
+      el.draggable = dashEditing;
+      el.innerHTML = `<h2><span>${esc(w.title(entry.cfg))}</span>
+        <span class="wctl"><span class="grip" title="Drag to move">⠿</span>
+          <button data-act="size" title="Cycle size (⅓ · ½ · full)">⬍</button>
+          <button data-act="x" class="x" title="Remove">✕</button></span></h2>
+        <div class="wbody"></div>`;
+      grid.appendChild(el);
+      const scope = [];
+      scopes.set(entry.uid, scope);
+      activeScope = scope;
+      try { w.mount(el.querySelector('.wbody'), entry.cfg); } finally { activeScope = null; }
+      return el;
+    };
+
+    const unmountEntry = uid => {
+      for (const fn of scopes.get(uid) || []) { try { fn(); } catch {} }
+      scopes.delete(uid);
+    };
+
+    for (const e of entries) mountEntry(e);
+    onCleanup(() => { for (const uid of [...scopes.keys()]) unmountEntry(uid); });
+
+    function setEditing(on) {
+      dashEditing = on;
+      root.classList.toggle('editing', on);
+      $('dash-edit').textContent = on ? '✓ Done' : '✎ Customize';
+      $('dash-edit').classList.toggle('ghost', !on);
+      $('dash-hint').textContent = on ? 'Drag panels to rearrange · ⬍ resize · ✕ remove' : '';
+      for (const el of grid.children) el.draggable = on;
+      if (on) syncSensorSel();
+    }
+    $('dash-edit').addEventListener('click', () => setEditing(!dashEditing));
+
+    // resize / remove — in place
+    grid.addEventListener('click', e => {
+      const btn = e.target.closest('.wctl button');
+      if (!btn) return;
+      const el = btn.closest('.panel'), entry = entries.find(x => x.uid === el.dataset.uid);
+      if (!entry) return;
+      if (btn.dataset.act === 'size') {
+        el.classList.remove('span' + entry.cfg.size);
+        entry.cfg.size = entry.cfg.size === 3 ? 6 : entry.cfg.size === 6 ? 12 : 3;
+        el.classList.add('span' + entry.cfg.size);
+        persist();
+        if (current.charts) for (const c of current.charts) c.render();
+      } else if (btn.dataset.act === 'x') {
+        unmountEntry(entry.uid);
+        el.remove();
+        entries.splice(entries.indexOf(entry), 1);
+        persist();
+      }
+    });
+
+    // drag & drop reorder with live reflow
+    let dragEl = null;
+    grid.addEventListener('dragstart', e => {
+      const el = e.target.closest('.panel');
+      if (!el || !dashEditing) return;
+      dragEl = el;
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', el.dataset.uid); } catch {}
+    });
+    grid.addEventListener('dragover', e => {
+      if (!dragEl) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const over = e.target.closest('.panel');
+      if (!over || over === dragEl) return;
+      const kids = [...grid.children];
+      if (kids.indexOf(dragEl) < kids.indexOf(over)) over.after(dragEl); else over.before(dragEl);
+      if (current.charts) for (const c of current.charts) c.render();
+    });
+    grid.addEventListener('drop', e => e.preventDefault());
+    grid.addEventListener('dragend', () => {
+      if (!dragEl) return;
+      dragEl.classList.remove('dragging');
+      dragEl = null;
+      persist();
+    });
+
+    // add widgets / reset layout
     const typeSel = $('add-type'), snSel = $('add-sensor');
-    const syncSensorSel = () => {
+    function syncSensorSel() {
       const isSensor = WIDGETS[typeSel.value] && WIDGETS[typeSel.value].sensor;
       snSel.style.display = isSensor ? '' : 'none';
       if (isSensor) fetch('/api/sensors').then(r => r.json()).then(d => {
@@ -1284,21 +1369,34 @@ pages.dashboard = {
         snSel.innerHTML = Object.entries(groups).map(([g, list]) =>
           `<optgroup label="${esc(g)}">${list.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtSensor(s.value, s.unit)})</option>`).join('')}</optgroup>`).join('');
       });
-    };
+    }
     typeSel.addEventListener('change', syncSensorSel);
-    syncSensorSel();
     $('add-go').addEventListener('click', () => {
       const type = typeSel.value, w = WIDGETS[type];
-      const c = dashLoad();
+      let cfg;
       if (w.sensor) {
         if (!snSel.value) { showToast('Pick a sensor first — or set one up on the Sensors page.'); return; }
-        c.push({ w: type, size: type === 'sensor-chart' ? 6 : 3, sensor: snSel.value, label: snSel.selectedOptions[0].textContent.replace(/ \(.*\)$/, '') });
+        cfg = { w: type, size: type === 'sensor-chart' ? 6 : 3, sensor: snSel.value, label: snSel.selectedOptions[0].textContent.replace(/ \(.*\)$/, '') };
       } else {
-        c.push({ w: type, size: type.startsWith('stat-') ? 3 : 6 });
+        cfg = { w: type, size: type.startsWith('stat-') ? 3 : 6 };
       }
-      dashSave(c);
-      renderPage();
+      const entry = { uid: 'u' + (uidSeq++), cfg };
+      entries.push(entry);
+      const el = mountEntry(entry);
+      el.draggable = true;
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      persist();
     });
+    $('dash-reset').addEventListener('click', () => {
+      for (const uid of [...scopes.keys()]) unmountEntry(uid);
+      grid.innerHTML = '';
+      entries.length = 0;
+      for (const c of DASH_DEFAULT.map(x => ({ ...x }))) entries.push({ uid: 'u' + (uidSeq++), cfg: c });
+      for (const e of entries) mountEntry(e);
+      persist();
+    });
+
+    if (dashEditing) setEditing(true);
   },
 };
 

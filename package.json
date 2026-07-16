@@ -1,7 +1,7 @@
 {
   "name": "pulse",
   "productName": "Pulse",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Pulse — live PC health dashboard and task manager for Windows. Streams CPU/memory/network/disk stats, runs health checks, and can end processes.",
   "author": "Trevor",
   "main": "electron-main.js",
