@@ -27,9 +27,16 @@ drive SMART data, and more.
   itself — the score shows its own math (−8 per warning, −25 per problem), and
   clicking any check reveals what it measures and the exact thresholds behind
   its color.
+- **Runs in the background** — lives in the system tray; closing the window keeps
+  it monitoring. A **mini overlay** (toggle from the tray) pins live CPU/GPU/RAM
+  and temps to the bottom-right corner, above the taskbar.
+- **Flight recorder** — records peaks and stress episodes (hot temps, sustained
+  max load, memory pressure) in the background, even while a fullscreen game hides
+  the app, so you can look back on the **Events** page and see what ran hot or
+  where your system bottlenecked. Survives restarts.
 - **Customizable dashboard** — your home page is a widget grid you control:
-  charts, stat tiles, per-core grid, top processes… add, resize, reorder, remove.
-  Pin any hardware sensor to it with one click. Layout saves automatically.
+  charts, stat tiles, per-core grid, top processes… drag to rearrange, resize,
+  add, remove. Pin any hardware sensor to it with one click. Layout saves automatically.
 - **Built-in sensor engine** — the installed app bundles its own sensor engine
   (powered by [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
   MPL-2.0): GPU temps/fans/power work out of the box, and running Pulse as

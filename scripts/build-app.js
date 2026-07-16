@@ -35,16 +35,18 @@ const root = path.join(__dirname, '..');
       CompanyName: 'Trevor',
     },
   });
-  // Bundle the sensor engine next to the app's resources (same spot the installer uses).
+  // Bundle the sensor engine + tray icon next to the app's resources (same spots the installer uses).
+  const res = path.join(paths[0], 'resources');
   const helper = path.join(root, 'dist', 'sensors', 'PulseSensors.exe');
   if (fs.existsSync(helper)) {
-    const dest = path.join(paths[0], 'resources', 'sensors');
-    fs.mkdirSync(dest, { recursive: true });
-    fs.copyFileSync(helper, path.join(dest, 'PulseSensors.exe'));
+    fs.mkdirSync(path.join(res, 'sensors'), { recursive: true });
+    fs.copyFileSync(helper, path.join(res, 'sensors', 'PulseSensors.exe'));
     console.log('    bundled sensor engine');
   } else {
     console.warn('    dist/sensors/PulseSensors.exe missing — run `npm run build:sensors` first');
   }
+  const ico = path.join(root, 'dist', 'pulse.ico');
+  if (fs.existsSync(ico)) fs.copyFileSync(ico, path.join(res, 'pulse.ico'));
 
   console.log('\nDone →', path.join(paths[0], 'Pulse.exe'));
 })().catch(err => { console.error(err); process.exit(1); });

@@ -115,6 +115,15 @@ async function fastTick() {
       gpuVram: g && g['memory.total'] ? +(g['memory.used'] / g['memory.total'] * 100).toFixed(1) : null,
     });
     broadcast('fast', latest.fast);
+    recordSample({
+      cpuLoad: load.currentLoad,
+      gpuLoad: g ? g['utilization.gpu'] : null,
+      cpuTemp: latest.fast.temp,
+      gpuTemp: g ? g['temperature.gpu'] : null,
+      memPct: mem.active / mem.total * 100,
+      vramPct: g && g['memory.total'] ? g['memory.used'] / g['memory.total'] * 100 : null,
+      gpuPower: g ? g['power.draw'] : null,
+    }, Date.now());
   } catch (err) {
     logErr('fastTick', err);
   }
@@ -298,6 +307,101 @@ app.get('/api/sensors', (req, res) => res.json({ ...lhm, elevated, builtinPresen
 app.get('/api/sensorhistory', (req, res) => {
   const h = sensorHist.get(String(req.query.id || ''));
   res.json(h ? { t: h.t, v: h.v } : { t: [], v: [] });
+});
+
+// ---------- flight recorder: peaks + threshold events, persisted ----------
+// Runs off every fast tick, so it captures stress even while a fullscreen game
+// hides the UI. Peaks = highest value seen; events = episodes over a threshold.
+const EVENTS_FILE = path.join(LOG_DIR, 'events.json');
+const PEAK_METRICS = {
+  cpuLoad: { label: 'CPU load', unit: '%' }, gpuLoad: { label: 'GPU load', unit: '%' },
+  cpuTemp: { label: 'CPU temp', unit: '°C' }, gpuTemp: { label: 'GPU temp', unit: '°C' },
+  memPct: { label: 'Memory', unit: '%' }, vramPct: { label: 'VRAM', unit: '%' },
+  gpuPower: { label: 'GPU power', unit: 'W' },
+};
+const EVENT_METRICS = {
+  gpuTemp: { label: 'GPU running hot', unit: '°C', minSec: 5, levels: [{ at: 83, sev: 'warn' }, { at: 90, sev: 'crit' }] },
+  cpuTemp: { label: 'CPU running hot', unit: '°C', minSec: 5, levels: [{ at: 85, sev: 'warn' }, { at: 95, sev: 'crit' }] },
+  gpuLoad: { label: 'GPU maxed out', unit: '%', minSec: 20, levels: [{ at: 97, sev: 'info' }] },
+  cpuLoad: { label: 'CPU maxed out', unit: '%', minSec: 20, levels: [{ at: 95, sev: 'info' }] },
+  memPct: { label: 'Memory pressure', unit: '%', minSec: 10, levels: [{ at: 92, sev: 'warn' }, { at: 97, sev: 'crit' }] },
+  vramPct: { label: 'VRAM near full', unit: '%', minSec: 10, levels: [{ at: 95, sev: 'info' }] },
+};
+const sevRank = s => (s === 'crit' ? 3 : s === 'warn' ? 2 : s === 'info' ? 1 : 0);
+
+let recorder = { since: Date.now(), peaks: {}, events: [], open: {} };
+try {
+  const saved = JSON.parse(fs.readFileSync(EVENTS_FILE, 'utf8'));
+  recorder.since = saved.since || Date.now();
+  recorder.peaks = saved.peaks || {};
+  recorder.events = Array.isArray(saved.events) ? saved.events : [];
+} catch {}
+
+let recorderDirty = false;
+function saveEvents() {
+  if (!recorderDirty) return;
+  recorderDirty = false;
+  try {
+    fs.writeFileSync(EVENTS_FILE, JSON.stringify({ since: recorder.since, peaks: recorder.peaks, events: recorder.events.slice(-250) }));
+  } catch (err) { logErr('events-save', err); }
+}
+setInterval(saveEvents, 15000);
+
+function closeEpisode(k, now) {
+  const open = recorder.open[k];
+  if (!open) return;
+  delete recorder.open[k];
+  const dur = (open.lastAt - open.startedAt) / 1000;
+  if (dur < EVENT_METRICS[k].minSec) return; // ignore brief blips
+  recorder.events.push({
+    type: k, label: EVENT_METRICS[k].label, unit: EVENT_METRICS[k].unit,
+    sev: open.sev, startedAt: open.startedAt, endedAt: open.lastAt,
+    durationSec: Math.round(dur), peak: +open.peak.toFixed(1),
+  });
+  if (recorder.events.length > 250) recorder.events.splice(0, recorder.events.length - 250);
+  recorderDirty = true;
+}
+
+const EPISODE_GRACE_MS = 8000; // a brief dip below threshold doesn't end an episode
+function recordSample(vals, now) {
+  for (const k in PEAK_METRICS) {
+    const v = vals[k];
+    if (v == null || !isFinite(v)) continue;
+    const p = recorder.peaks[k];
+    if (!p || v > p.value) { recorder.peaks[k] = { value: +v.toFixed(1), at: now }; recorderDirty = true; }
+  }
+  for (const k in EVENT_METRICS) {
+    const v = vals[k];
+    let sev = null;
+    if (v != null && isFinite(v)) for (const lv of EVENT_METRICS[k].levels) if (v >= lv.at) sev = lv.sev;
+    const open = recorder.open[k];
+    if (sev) {
+      // over threshold: open or extend the episode (lastAt tracks the last hot moment)
+      if (!open) recorder.open[k] = { startedAt: now, lastAt: now, peak: v, sev, clearingSince: null };
+      else { open.lastAt = now; open.clearingSince = null; if (v > open.peak) open.peak = v; if (sevRank(sev) > sevRank(open.sev)) open.sev = sev; }
+    } else if (open) {
+      // under threshold: only end the episode after it's stayed clear past the grace window
+      if (!open.clearingSince) open.clearingSince = now;
+      if (now - open.clearingSince >= EPISODE_GRACE_MS) closeEpisode(k, now);
+    }
+  }
+}
+
+app.get('/api/events', (req, res) => {
+  const now = Date.now();
+  const ongoing = Object.entries(recorder.open).map(([k, o]) => ({
+    type: k, label: EVENT_METRICS[k].label, unit: EVENT_METRICS[k].unit, sev: o.sev,
+    startedAt: o.startedAt, endedAt: null, durationSec: Math.round((now - o.startedAt) / 1000),
+    peak: +o.peak.toFixed(1), ongoing: true,
+  }));
+  res.json({ since: recorder.since, peaks: recorder.peaks, ongoing, events: recorder.events.slice(-150).reverse() });
+});
+
+app.post('/api/events/clear', (req, res) => {
+  recorder = { since: Date.now(), peaks: {}, events: [], open: {} };
+  recorderDirty = true;
+  saveEvents();
+  res.json({ ok: true });
 });
 
 setInterval(fastTick, TICK_MS);

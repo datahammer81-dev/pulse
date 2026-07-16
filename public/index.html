@@ -637,6 +637,7 @@ const PAGES = [
   { id: 'storage',   label: 'Storage',   glyph: '◫' },
   { id: 'network',   label: 'Network',   glyph: '⇅' },
   { id: 'sensors',   label: 'Sensors',   glyph: '≈' },
+  { id: 'events',    label: 'Events',    glyph: '⚑' },
   { id: 'processes', label: 'Processes', glyph: '≣' },
 ];
 $('nav').innerHTML = PAGES.map(p =>
@@ -1399,6 +1400,64 @@ pages.dashboard = {
     if (dashEditing) setEditing(true);
   },
 };
+
+/* ---------- events / flight recorder ---------- */
+pages.events = {
+  html: () => `
+    <div class="panel" style="margin-bottom:14px">
+      <h2>Flight recorder <span class="aside" id="ev-since"></span></h2>
+      <p class="note" style="font-size:12.5px">Pulse records peaks and stress episodes in the background — even while a
+      fullscreen game hides the app — so you can look back and see what ran hot or maxed out, and where your system bottlenecks.</p>
+    </div>
+    <div class="panel" style="margin-bottom:14px">
+      <h2>Peaks <span class="aside" style="cursor:pointer;text-decoration:underline" id="ev-clear">reset</span></h2>
+      <div id="ev-peaks" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:8px"></div>
+    </div>
+    <div class="panel"><h2>Stress episodes <span class="aside" id="ev-count"></span></h2>
+      <div id="ev-list"><div class="note">Loading…</div></div></div>`,
+  mount() {
+    const PEAK_ORDER = [['gpuTemp', 'Max GPU temp'], ['cpuTemp', 'Max CPU temp'], ['gpuLoad', 'Peak GPU load'],
+      ['cpuLoad', 'Peak CPU load'], ['gpuPower', 'Peak GPU power'], ['memPct', 'Peak memory'], ['vramPct', 'Peak VRAM']];
+    const sevColor = s => s === 'crit' ? 'var(--crit)' : s === 'warn' ? 'var(--warn)' : 'var(--cpu)';
+    const sevMark = s => s === 'crit' ? '✕' : s === 'warn' ? '!' : '●';
+    const fmtDur = s => { const m = Math.floor(s / 60), sec = s % 60; return (m ? m + 'm ' : '') + sec + 's'; };
+    const whenStr = t => {
+      const d = new Date(t), now = new Date();
+      const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+      return d.toDateString() === now.toDateString() ? time : d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + time;
+    };
+
+    const render = d => {
+      $('ev-since').textContent = 'recording since ' + whenStr(d.since);
+      const peaks = PEAK_ORDER.filter(([k]) => d.peaks[k]);
+      $('ev-peaks').innerHTML = peaks.length ? peaks.map(([k, label]) => {
+        const p = d.peaks[k], unit = PEAK_METRICS_UNIT[k] || '';
+        return `<div style="background:var(--panel-2);padding:10px 12px;clip-path:polygon(0 0,calc(100% - 9px) 0,100% 9px,100% 100%,0 100%)">
+          <div style="font-size:21px;font-weight:800;font-variant-numeric:tabular-nums">${p.value}${unit}</div>
+          <div class="note" style="font-size:10.5px">${label} · ${whenStr(p.at)}</div></div>`;
+      }).join('') : '<div class="note">No peaks recorded yet.</div>';
+
+      const all = [...d.ongoing, ...d.events];
+      $('ev-count').textContent = d.events.length + ' episode' + (d.events.length === 1 ? '' : 's') + (d.ongoing.length ? ' · ' + d.ongoing.length + ' active now' : '');
+      $('ev-list').innerHTML = all.length ? `<div class="checks">` + all.map(ev => {
+        const c = sevColor(ev.sev);
+        return `<div class="check" style="cursor:default"><div class="check-head" style="cursor:default">
+          <span class="icon" style="color:${c}">${sevMark(ev.sev)}</span>
+          <span class="name">${esc(ev.label)}</span>
+          <span class="detail">peaked ${ev.peak}${ev.unit} · ${ev.ongoing ? '<span style="color:' + c + '">ongoing ' : 'lasted '}${fmtDur(ev.durationSec)}${ev.ongoing ? '</span>' : ''}</span>
+          <span class="chev" style="transform:none;color:var(--muted)">${whenStr(ev.startedAt)}</span>
+        </div></div>`;
+      }).join('') + `</div>` : '<div class="note">Nothing notable yet — spikes in temperature or sustained max load will show up here.</div>';
+    };
+
+    every(5000, () => fetch('/api/events').then(r => r.json()).then(render).catch(() => {}));
+    $('ev-clear').addEventListener('click', () => {
+      fetch('/api/events/clear', { method: 'POST' }).then(() => fetch('/api/events').then(r => r.json()).then(render));
+      showToast('Peaks and episode history cleared.');
+    });
+  },
+};
+const PEAK_METRICS_UNIT = { cpuLoad: '%', gpuLoad: '%', cpuTemp: '°C', gpuTemp: '°C', memPct: '%', vramPct: '%', gpuPower: ' W' };
 
 /* ---------- sensors page ---------- */
 pages.sensors = {

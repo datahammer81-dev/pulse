@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pulse overlay</title>
+<style>
+  :root {
+    --ink: #f2f2f5; --ink-2: #b7b7bf; --muted: #7f7f89;
+    --good: #35c759; --warn: #fab219; --crit: #ff4d4d; --accent: #e8283f;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { background: transparent; overflow: hidden; user-select: none; }
+  body { font-family: system-ui, "Segoe UI", sans-serif; padding: 6px; }
+  #card {
+    background: rgba(12, 12, 15, 0.86);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 11px;
+    padding: 8px 11px 9px;
+    box-shadow: 0 6px 22px rgba(0,0,0,0.5);
+    backdrop-filter: blur(3px);
+    transition: border-color .3s, box-shadow .3s;
+  }
+  #card.warn { border-color: rgba(250,178,25,0.55); box-shadow: 0 0 16px rgba(250,178,25,0.28); }
+  #card.crit { border-color: rgba(255,77,77,0.7); box-shadow: 0 0 18px rgba(255,77,77,0.4); }
+  .top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .top .brand { font-size: 10px; font-weight: 800; letter-spacing: 2px; color: var(--ink); }
+  .top .brand i { color: var(--accent); font-style: normal; }
+  .top .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--crit); margin-left: auto; }
+  .top .dot.on { background: var(--good); }
+  .row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 8px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+  .row .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; color: var(--muted); }
+  .row .v { font-size: 13px; font-weight: 700; color: var(--ink); text-align: right; }
+  .row .t { font-size: 12px; font-weight: 700; text-align: right; min-width: 42px; }
+  .bar { grid-column: 1 / -1; height: 3px; background: rgba(255,255,255,0.09); border-radius: 2px; overflow: hidden; margin-top: 1px; }
+  .bar > div { height: 100%; border-radius: 2px; transition: width .4s; }
+  #alert { display: none; margin-top: 6px; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--crit); border-radius: 6px; padding: 3px 7px; }
+  #alert.warn { background: var(--warn); color: #1a1a19; }
+  #alert.show { display: block; }
+  .t.good { color: var(--good); } .t.warn { color: var(--warn); } .t.crit { color: var(--crit); }
+</style>
+</head>
+<body>
+<div id="card">
+  <div class="top"><span class="brand">PULSE<i>_</i></span><span class="dot" id="dot"></span></div>
+  <div class="row"><span class="k">CPU</span><span class="v"><span id="cpu">–</span>%</span><span class="t" id="cpuT">–</span>
+    <div class="bar"><div id="cpuBar" style="width:0;background:var(--good)"></div></div></div>
+  <div class="row"><span class="k">GPU</span><span class="v"><span id="gpu">–</span>%</span><span class="t" id="gpuT">–</span>
+    <div class="bar"><div id="gpuBar" style="width:0;background:var(--good)"></div></div></div>
+  <div class="row"><span class="k">RAM</span><span class="v"><span id="mem">–</span>%</span><span class="t" id="net" style="color:var(--ink-2);font-weight:600">–</span>
+    <div class="bar"><div id="memBar" style="width:0;background:var(--good)"></div></div></div>
+  <div id="alert"></div>
+</div>
+<script>
+  const $ = id => document.getElementById(id);
+  const fmtRate = b => b >= 1e6 ? (b/1e6).toFixed(1)+' MB/s' : (b/1e3).toFixed(0)+' KB/s';
+  const loadColor = v => v > 92 ? 'var(--crit)' : v > 75 ? 'var(--warn)' : 'var(--good)';
+  const tempClass = (v, w, c) => v == null ? '' : v >= c ? 'crit' : v >= w ? 'warn' : 'good';
+  let worst = 'good';
+  const bumpWorst = s => { const r = {good:0,warn:1,crit:2}; if (r[s] > r[worst]) worst = s; };
+
+  function paintCard() {
+    $('card').className = worst === 'good' ? '' : worst;
+    worst = 'good';
+  }
+
+  const es = new EventSource('/api/live');
+  es.onopen = () => $('dot').classList.add('on');
+  es.onerror = () => $('dot').classList.remove('on');
+
+  es.addEventListener('fast', e => {
+    const d = JSON.parse(e.data);
+    $('cpu').textContent = d.cpu.avg.toFixed(0);
+    $('cpuBar').style.width = Math.min(100, d.cpu.avg) + '%';
+    $('cpuBar').style.background = loadColor(d.cpu.avg);
+    if (d.temp != null) { const cl = tempClass(d.temp, 85, 95); $('cpuT').textContent = d.temp.toFixed(0)+'°'; $('cpuT').className = 't ' + cl; bumpWorst(cl); }
+    else $('cpuT').textContent = '';
+    const memPct = d.mem.used / d.mem.total * 100;
+    $('mem').textContent = memPct.toFixed(0);
+    $('memBar').style.width = Math.min(100, memPct) + '%';
+    $('memBar').style.background = loadColor(memPct);
+    $('net').textContent = '↓' + fmtRate(d.net.rx);
+    paintCard();
+  });
+  es.addEventListener('gpu', e => {
+    const g = JSON.parse(e.data);
+    const u = g['utilization.gpu'], t = g['temperature.gpu'];
+    if (u != null) { $('gpu').textContent = u.toFixed(0); $('gpuBar').style.width = Math.min(100, u)+'%'; $('gpuBar').style.background = loadColor(u); }
+    if (t != null) { const cl = tempClass(t, 83, 90); $('gpuT').textContent = t.toFixed(0)+'°'; $('gpuT').className = 't ' + cl; bumpWorst(cl); }
+  });
+
+  // ongoing-event banner
+  async function pollEvents() {
+    try {
+      const d = await fetch('/api/events').then(r => r.json());
+      const on = d.ongoing || [];
+      const a = $('alert');
+      if (on.length) {
+        const worstEv = on.sort((x, y) => ({crit:3,warn:2,info:1}[y.sev]) - ({crit:3,warn:2,info:1}[x.sev]))[0];
+        const m = Math.floor(worstEv.durationSec / 60), s = worstEv.durationSec % 60;
+        a.textContent = `⚠ ${worstEv.label} — ${worstEv.peak}${worstEv.unit} (${m ? m+'m ' : ''}${s}s)`;
+        a.className = 'show ' + (worstEv.sev === 'crit' ? '' : 'warn');
+      } else a.className = '';
+    } catch {}
+  }
+  pollEvents();
+  setInterval(pollEvents, 4000);
+</script>
+</body>
+</html>
