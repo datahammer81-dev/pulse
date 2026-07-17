@@ -2,5 +2,6 @@ node_modules/
 dist/
 pulse.log
 events.json
+overlay.json
 sensors-helper/bin/
 sensors-helper/obj/

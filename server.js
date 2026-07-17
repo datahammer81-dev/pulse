@@ -413,6 +413,67 @@ app.post('/api/events/clear', (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- overlay configuration ----------
+// One source of truth shared by the app's Overlay tab, the widget itself, and
+// the Electron tray/right-click menus. Changes broadcast over SSE ('overlaycfg').
+const OVERLAY_FILE = path.join(LOG_DIR, 'overlay.json');
+const OVERLAY_MAX = 10;
+const OVERLAY_METRICS = ['cpu', 'gpu', 'mem', 'net', 'vram', 'gpupower', 'pagefile', 'uptime', 'health', 'topproc', 'peak-gputemp', 'peak-cputemp', 'alerts'];
+const overlayDefaults = () => ({
+  items: [
+    { id: 'cpu', kind: 'metric', metric: 'cpu', on: true },
+    { id: 'gpu', kind: 'metric', metric: 'gpu', on: true },
+    { id: 'mem', kind: 'metric', metric: 'mem', on: true },
+    { id: 'net', kind: 'metric', metric: 'net', on: true },
+    { id: 'alerts', kind: 'metric', metric: 'alerts', on: true },
+  ],
+  appearance: { scale: 1, opacity: 0.86, compact: false },
+});
+
+function sanitizeOverlay(input) {
+  if (!input || typeof input !== 'object' || !Array.isArray(input.items)) return { error: 'invalid config' };
+  if (input.items.length > OVERLAY_MAX) return { error: `max ${OVERLAY_MAX} items` };
+  const items = [], seen = new Set();
+  for (const it of input.items) {
+    if (!it || typeof it !== 'object') continue;
+    if (it.kind === 'metric' && OVERLAY_METRICS.includes(it.metric)) {
+      if (seen.has(it.metric)) continue;
+      seen.add(it.metric);
+      items.push({ id: it.metric, kind: 'metric', metric: it.metric, on: it.on !== false });
+    } else if (it.kind === 'sensor' && typeof it.sensor === 'string' && it.sensor.length > 0 && it.sensor.length < 220) {
+      const id = 'sensor:' + it.sensor;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push({ id, kind: 'sensor', sensor: it.sensor, label: String(it.label || '').slice(0, 40), on: it.on !== false });
+    }
+  }
+  const a = (input.appearance && typeof input.appearance === 'object') ? input.appearance : {};
+  return {
+    items,
+    appearance: {
+      scale: [0.85, 1, 1.25].includes(a.scale) ? a.scale : 1,
+      opacity: typeof a.opacity === 'number' ? Math.min(1, Math.max(0.4, a.opacity)) : 0.86,
+      compact: !!a.compact,
+    },
+  };
+}
+
+let overlayCfg = overlayDefaults();
+try {
+  const saved = sanitizeOverlay(JSON.parse(fs.readFileSync(OVERLAY_FILE, 'utf8')));
+  if (!saved.error) overlayCfg = saved;
+} catch {}
+
+app.get('/api/overlay', (req, res) => res.json({ ...overlayCfg, max: OVERLAY_MAX }));
+app.post('/api/overlay', (req, res) => {
+  const clean = sanitizeOverlay(req.body);
+  if (clean.error) return res.status(400).json({ error: clean.error });
+  overlayCfg = clean;
+  try { fs.writeFileSync(OVERLAY_FILE, JSON.stringify(overlayCfg)); } catch (err) { logErr('overlay-save', err); }
+  broadcast('overlaycfg', overlayCfg);
+  res.json({ ok: true });
+});
+
 // Collection cadence scales with who's watching. The recorder still samples in
 // every mode (5s in sleep is plenty to catch a sustained hot/maxed episode).
 const RATES = {
@@ -458,6 +519,7 @@ app.get('/api/live', (req, res) => {
   if (latest.gpu) send('gpu', latest.gpu);
   if (latest.disks) send('disks', latest.disks);
   send('sensors', { available: lhm.available, sensors: lhm.sensors, source: lhm.source });
+  send('overlaycfg', overlayCfg);
 
   const drop = () => { if (closed) return; closed = true; sseClients.delete(send); if (!isOverlay) dashboardClients = Math.max(0, dashboardClients - 1); };
   req.on('close', drop);

@@ -1,25 +1,29 @@
 // Pulse desktop app — hosts the dashboard server in-process, lives in the system
-// tray, and can show a mini always-on-top overlay you can drag anywhere and
-// whose rows (CPU/GPU/RAM/NET/alerts) are configurable.
+// tray, and shows a mini always-on-top overlay that is draggable, click-through
+// capable, and fully configurable (items + appearance live in the server's
+// overlay config, shared with the app's Overlay tab).
 const { app, BrowserWindow, Tray, Menu, screen, nativeImage, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 const PORT = Number(process.env.PULSE_PORT) || 7377;
 const URL = `http://localhost:${PORT}`;
-const OVERLAY_W = 208;
 const iconPath = () => app.isPackaged
   ? path.join(process.resourcesPath, 'pulse.ico')
   : path.join(__dirname, 'dist', 'pulse.ico');
 
-// Persisted UI prefs (overlay on/off, its position, its rows) in the app's data dir.
+// Electron-side prefs (overlay on/off, its position, click-through) in userData.
+// Item/appearance config lives server-side so the web UI can edit it too.
 const prefsFile = path.join(app.getPath('userData'), 'prefs.json');
 function loadPrefs() { try { return JSON.parse(fs.readFileSync(prefsFile, 'utf8')); } catch { return {}; } }
 function savePrefs(p) { try { fs.writeFileSync(prefsFile, JSON.stringify(p)); } catch {} }
 let prefs = loadPrefs();
 
-const OVERLAY_ROWS = [['cpu', 'CPU'], ['gpu', 'GPU'], ['mem', 'RAM'], ['net', 'Network'], ['alerts', 'Alert banner']];
-const overlayItems = () => ({ cpu: true, gpu: true, mem: true, net: true, alerts: true, ...(prefs.overlayItems || {}) });
+const METRIC_LABELS = {
+  cpu: 'CPU', gpu: 'GPU', mem: 'RAM', net: 'Network', vram: 'VRAM', gpupower: 'GPU power',
+  pagefile: 'Page file', uptime: 'Uptime', health: 'Health score', topproc: 'Top process',
+  'peak-gputemp': 'Peak GPU temp', 'peak-cputemp': 'Peak CPU temp', alerts: 'Alert banner',
+};
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -48,6 +52,10 @@ if (!app.requestSingleInstanceLock()) {
     if (!win) createWindow();
     else { if (win.isMinimized()) win.restore(); win.show(); win.focus(); }
   };
+  const openOverlaySettings = () => {
+    showWindow();
+    if (win) win.webContents.executeJavaScript(`location.hash = '#/overlay'`).catch(() => {});
+  };
 
   // ----- overlay placement: saved spot (clamped on-screen) or bottom-right default -----
   const clampToDisplay = (x, y, w, h) => {
@@ -69,23 +77,22 @@ if (!app.requestSingleInstanceLock()) {
     }
   };
 
-  const pushOverlayConfig = () => {
-    if (overlay) overlay.webContents.send('overlay-config', overlayItems());
-  };
+  const clickThrough = () => prefs.clickThrough === true;
+  const applyClickThrough = () => { if (overlay) overlay.setIgnoreMouseEvents(clickThrough()); };
 
   const createOverlay = () => {
     if (overlay) { overlay.show(); return; }
     overlay = new BrowserWindow({
-      width: OVERLAY_W, height: 150,
+      width: 208, height: 150,
       frame: false, transparent: true, resizable: false, movable: false,
       alwaysOnTop: true, skipTaskbar: true, focusable: false, hasShadow: false,
       show: false, backgroundColor: '#00000000',
       webPreferences: { preload: path.join(__dirname, 'overlay-preload.js') },
     });
     overlay.setAlwaysOnTop(true, 'screen-saver');
+    applyClickThrough();
     overlay.loadURL(URL + '/overlay.html');
     overlay.webContents.on('did-fail-load', () => setTimeout(() => overlay && overlay.loadURL(URL + '/overlay.html'), 500));
-    overlay.webContents.on('did-finish-load', pushOverlayConfig);
     overlay.once('ready-to-show', () => { placeOverlay(); overlay.showInactive(); });
     overlay.on('closed', () => { overlay = null; });
   };
@@ -100,19 +107,8 @@ if (!app.requestSingleInstanceLock()) {
     if (on) createOverlay(); else destroyOverlay();
     buildTrayMenu();
   };
-  const setOverlayItem = (key, val) => {
-    prefs.overlayItems = { ...overlayItems(), [key]: val };
-    savePrefs(prefs);
-    pushOverlayConfig();
-    buildTrayMenu();
-  };
 
-  const overlayItemsTemplate = () => OVERLAY_ROWS.map(([k, label]) => ({
-    label, type: 'checkbox', checked: overlayItems()[k], click: m => setOverlayItem(k, m.checked),
-  }));
-
-  // ----- drag-to-move: the main process follows the cursor while the mouse is down,
-  // so the overlay can move anywhere (any monitor) without ever taking focus. -----
+  // ----- drag-to-move: main follows the cursor while the mouse is down -----
   let dragTimer = null;
   const endDrag = save => {
     if (dragTimer) { clearInterval(dragTimer); dragTimer = null; }
@@ -139,24 +135,40 @@ if (!app.requestSingleInstanceLock()) {
     endDrag(true);
   });
 
-  // The page reports its content height so the window always fits exactly.
-  ipcMain.on('overlay-resize', (e, h) => {
+  // The page reports its content size ({w,h} — or a bare height from older pages).
+  ipcMain.on('overlay-resize', (e, dims) => {
     if (!overlay || e.sender !== overlay.webContents) return;
-    const height = Math.max(48, Math.min(420, Math.round(Number(h) || 0)));
+    const rawW = dims && typeof dims === 'object' ? dims.w : null;
+    const rawH = dims && typeof dims === 'object' ? dims.h : dims;
+    const width = Math.max(120, Math.min(920, Math.round(Number(rawW) || overlay.getBounds().width)));
+    const height = Math.max(40, Math.min(520, Math.round(Number(rawH) || 0)));
     if (!height) return;
     const b = overlay.getBounds();
-    if (b.height === height) return;
-    overlay.setBounds({ ...b, height });
+    if (b.width === width && b.height === height) return;
+    overlay.setBounds({ ...b, width, height });
     placeOverlay(); // re-anchor (default) or clamp (custom spot)
   });
 
-  ipcMain.on('overlay-menu', e => {
+  // Right-click menu: item toggles come from the server's overlay config.
+  ipcMain.on('overlay-menu', async e => {
     if (!overlay || e.sender !== overlay.webContents) return;
+    let cfg = null;
+    try { cfg = await (await fetch(URL + '/api/overlay')).json(); } catch {}
+    const post = body => fetch(URL + '/api/overlay', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }).catch(() => {});
+    const itemToggles = (cfg ? cfg.items : []).map(it => ({
+      label: it.kind === 'sensor' ? (it.label || it.sensor.split('|').pop()) : (METRIC_LABELS[it.metric] || it.metric),
+      type: 'checkbox', checked: it.on !== false,
+      click: m => { it.on = m.checked; post(cfg); },
+    }));
     Menu.buildFromTemplate([
-      { label: 'Show on overlay', enabled: false },
-      ...overlayItemsTemplate(),
+      { label: 'Overlay items', enabled: false },
+      ...itemToggles,
       { type: 'separator' },
-      { label: 'Open Pulse', click: showWindow },
+      ...(cfg ? [{ label: 'Compact strip', type: 'checkbox', checked: !!cfg.appearance.compact, click: m => { cfg.appearance.compact = m.checked; post(cfg); } }] : []),
+      { label: 'Edit in Pulse…', click: openOverlaySettings },
+      { type: 'separator' },
       { label: 'Reset position', click: () => { delete prefs.overlayPos; savePrefs(prefs); placeOverlay(); } },
       { label: 'Hide overlay', click: () => setOverlay(false) },
     ]).popup();
@@ -166,8 +178,11 @@ if (!app.requestSingleInstanceLock()) {
     if (!tray) return;
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: 'Open Pulse', click: showWindow },
+      { type: 'separator' },
       { label: 'Mini overlay', type: 'checkbox', checked: overlayEnabled(), click: m => setOverlay(m.checked) },
-      { label: 'Overlay items', submenu: overlayItemsTemplate() },
+      { label: 'Overlay settings…', click: openOverlaySettings },
+      { label: 'Click-through overlay', type: 'checkbox', checked: clickThrough(),
+        click: m => { prefs.clickThrough = m.checked; savePrefs(prefs); applyClickThrough(); } },
       { label: 'Reset overlay position', click: () => { delete prefs.overlayPos; savePrefs(prefs); placeOverlay(); } },
       { type: 'separator' },
       { label: 'Quit Pulse', click: () => { app.isQuitting = true; app.quit(); } },

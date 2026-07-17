@@ -535,7 +535,7 @@ function connectSSE() {
     loadStatic(); // after an elevated relaunch the admin badge and sensors change
   };
   es.onerror = () => { $('live-dot').classList.remove('on'); $('live-label').textContent = 'reconnecting'; };
-  for (const ev of ['fast', 'gpu', 'disks', 'sensors']) {
+  for (const ev of ['fast', 'gpu', 'disks', 'sensors', 'overlaycfg']) {
     es.addEventListener(ev, e => {
       live[ev] = JSON.parse(e.data);
       if (ev === 'fast') $('uptime-chip').innerHTML = `UP <b>${fmtUp(live.fast.uptime)}</b>`;
@@ -651,6 +651,7 @@ const PAGES = [
   { id: 'storage',   label: 'Storage',   glyph: '◫' },
   { id: 'network',   label: 'Network',   glyph: '⇅' },
   { id: 'sensors',   label: 'Sensors',   glyph: '≈' },
+  { id: 'overlay',   label: 'Overlay',   glyph: '⧉' },
   { id: 'events',    label: 'Events',    glyph: '⚑' },
   { id: 'processes', label: 'Processes', glyph: '≣' },
 ];
@@ -1557,6 +1558,128 @@ pages.sensors = {
       render(live.sensors || d);
     }).catch(() => { if (live.sensors) render(live.sensors); });
     onBus('sensors', e => render(e.detail));
+  },
+};
+
+/* ---------- overlay tab: pick up to 10 items + appearance ---------- */
+const OV_METRICS = [
+  ['cpu', 'CPU load + temp'], ['gpu', 'GPU load + temp'], ['mem', 'RAM'], ['net', 'Network rates'],
+  ['vram', 'VRAM usage'], ['gpupower', 'GPU power draw'], ['pagefile', 'Page file'], ['uptime', 'Uptime'],
+  ['health', 'Health score'], ['topproc', 'Top process'], ['peak-gputemp', 'Peak GPU temp (session)'],
+  ['peak-cputemp', 'Peak CPU temp (session)'], ['alerts', 'Alert banner'],
+];
+const OV_METRIC_MAP = Object.fromEntries(OV_METRICS);
+
+pages.overlay = {
+  html: () => `
+    <div class="grid" style="grid-template-columns: 7fr 5fr">
+      <div class="panel"><h2>Overlay items <span class="aside" id="ol-count"></span></h2>
+        <div id="ol-list"><div class="note">Loading…</div></div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px">
+          <select id="ol-add-metric"></select>
+          <button class="hud-btn" id="ol-add-metric-go">+ Add stat</button>
+          <select id="ol-add-sensor"><option value="">loading sensors…</option></select>
+          <button class="hud-btn" id="ol-add-sensor-go">+ Add sensor</button>
+        </div>
+      </div>
+      <div>
+        <div class="panel" style="margin-bottom:14px"><h2>Appearance</h2>
+          <div class="kv"><span class="k">Size</span><span class="v">
+            <select id="ol-scale"><option value="0.85">Small</option><option value="1">Medium</option><option value="1.25">Large</option></select></span></div>
+          <div class="kv"><span class="k">Opacity</span><span class="v">
+            <input type="range" id="ol-opacity" min="40" max="100" step="5" style="width:140px;vertical-align:middle">
+            <span id="ol-opacity-val" style="display:inline-block;min-width:38px"></span></span></div>
+          <div class="kv"><span class="k">Compact strip</span><span class="v"><input type="checkbox" id="ol-compact"> <span class="note">one horizontal line instead of the card</span></span></div>
+        </div>
+        <div class="panel"><h2>Tips</h2>
+          <p class="note" style="font-size:12.5px;line-height:1.8">
+          · Drag the widget anywhere on any monitor — it remembers its spot.<br>
+          · Right-click the widget to toggle items without opening the app.<br>
+          · Show/hide, <b style="color:var(--ink)">click-through mode</b> and position reset live in the tray menu.<br>
+          · Changes here apply to the widget instantly.</p>
+        </div>
+      </div>
+    </div>`,
+  mount() {
+    let ocfg = null, saving = false;
+    const save = () => {
+      saving = true;
+      return fetch('/api/overlay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(ocfg) })
+        .then(r => { if (!r.ok) return r.json().then(d => showToast('<b>Not saved:</b> ' + esc(d.error || 'unknown error'))); })
+        .catch(() => showToast('Could not reach Pulse to save.'))
+        .finally(() => { saving = false; });
+    };
+    const label = it => it.kind === 'sensor' ? (it.label || it.sensor.split('|').pop()) : (OV_METRIC_MAP[it.metric] || it.metric);
+
+    const renderList = () => {
+      if (!ocfg) return;
+      $('ol-count').textContent = `${ocfg.items.length} / ${ocfg.max || 10}`;
+      $('ol-list').innerHTML = ocfg.items.length ? ocfg.items.map((it, i) => `
+        <div class="kv" style="align-items:center">
+          <span class="k" style="display:flex;gap:8px;align-items:center">
+            <span class="wctl" style="display:inline-flex">
+              <button data-i="${i}" data-act="up" title="Move up">▲</button>
+              <button data-i="${i}" data-act="down" title="Move down">▼</button></span>
+            <input type="checkbox" data-i="${i}" data-act="on" ${it.on !== false ? 'checked' : ''} title="Show on overlay"></span>
+          <span class="v" style="text-align:left;color:${it.on !== false ? 'var(--ink)' : 'var(--muted)'}">
+            ${esc(label(it))} <span class="note" style="margin-left:6px">${it.kind === 'sensor' ? 'sensor' : 'stat'}</span></span>
+          <button class="kill" data-i="${i}" data-act="x">remove</button>
+        </div>`).join('') : '<div class="note">Nothing on the overlay yet — add stats or sensors below.</div>';
+      const used = new Set(ocfg.items.map(x => x.id));
+      const opts = OV_METRICS.filter(([k]) => !used.has(k));
+      $('ol-add-metric').innerHTML = opts.length ? opts.map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('') : '<option value="">all stats added</option>';
+    };
+    const syncAppearance = () => {
+      if (!ocfg) return;
+      $('ol-scale').value = String(ocfg.appearance.scale);
+      $('ol-opacity').value = Math.round(ocfg.appearance.opacity * 100);
+      $('ol-opacity-val').textContent = Math.round(ocfg.appearance.opacity * 100) + '%';
+      $('ol-compact').checked = !!ocfg.appearance.compact;
+    };
+
+    $('ol-list').addEventListener('click', e => {
+      const b = e.target.closest('[data-act]');
+      if (!b || !ocfg) return;
+      const i = Number(b.dataset.i), act = b.dataset.act;
+      if (act === 'up' && i > 0) [ocfg.items[i - 1], ocfg.items[i]] = [ocfg.items[i], ocfg.items[i - 1]];
+      else if (act === 'down' && i < ocfg.items.length - 1) [ocfg.items[i + 1], ocfg.items[i]] = [ocfg.items[i], ocfg.items[i + 1]];
+      else if (act === 'x') ocfg.items.splice(i, 1);
+      else if (act === 'on') ocfg.items[i].on = b.checked;
+      else return;
+      renderList();
+      save();
+    });
+    const addItem = item => {
+      if (ocfg.items.length >= (ocfg.max || 10)) { showToast(`Overlay is full — max ${ocfg.max || 10} items. Remove one first.`); return; }
+      ocfg.items.push(item);
+      renderList();
+      save();
+    };
+    $('ol-add-metric-go').addEventListener('click', () => {
+      const k = $('ol-add-metric').value;
+      if (k) addItem({ id: k, kind: 'metric', metric: k, on: true });
+    });
+    $('ol-add-sensor-go').addEventListener('click', () => {
+      const sel = $('ol-add-sensor');
+      if (!sel.value) { showToast('Pick a sensor first — or set one up on the Sensors page.'); return; }
+      if (ocfg.items.some(x => x.id === 'sensor:' + sel.value)) { showToast('That sensor is already on the overlay.'); return; }
+      addItem({ id: 'sensor:' + sel.value, kind: 'sensor', sensor: sel.value, label: sel.selectedOptions[0].textContent.replace(/ \(.*\)$/, ''), on: true });
+    });
+    $('ol-scale').addEventListener('change', () => { ocfg.appearance.scale = Number($('ol-scale').value); save(); });
+    $('ol-opacity').addEventListener('input', () => { $('ol-opacity-val').textContent = $('ol-opacity').value + '%'; });
+    $('ol-opacity').addEventListener('change', () => { ocfg.appearance.opacity = Number($('ol-opacity').value) / 100; save(); });
+    $('ol-compact').addEventListener('change', () => { ocfg.appearance.compact = $('ol-compact').checked; save(); });
+
+    fetch('/api/overlay').then(r => r.json()).then(c => { ocfg = c; renderList(); syncAppearance(); }).catch(() => {});
+    fetch('/api/sensors').then(r => r.json()).then(d => {
+      const sel = $('ol-add-sensor');
+      if (!d.available) { sel.innerHTML = '<option value="">no sensor source — see Sensors page</option>'; return; }
+      const groups = {};
+      for (const s of d.sensors) (groups[`${s.hw} · ${s.category}`] = groups[`${s.hw} · ${s.category}`] || []).push(s);
+      sel.innerHTML = Object.entries(groups).map(([g, list]) =>
+        `<optgroup label="${esc(g)}">${list.map(s => `<option value="${esc(s.id)}">${esc(s.name)} (${fmtSensor(s.value, s.unit)})</option>`).join('')}</optgroup>`).join('');
+    }).catch(() => {});
+    onBus('overlaycfg', e => { if (saving) return; ocfg = { ...e.detail, max: (ocfg && ocfg.max) || 10 }; renderList(); syncAppearance(); });
   },
 };
 

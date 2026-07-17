@@ -13,6 +13,7 @@
   html, body { background: transparent; overflow: hidden; user-select: none; }
   body { font-family: system-ui, "Segoe UI", sans-serif; padding: 6px; }
   #card {
+    display: inline-block; min-width: 184px; max-width: 560px;
     background: rgba(12, 12, 15, 0.86);
     border: 1px solid rgba(255,255,255,0.10);
     border-radius: 11px;
@@ -30,126 +31,201 @@
   .top .brand i { color: var(--accent); font-style: normal; }
   .top .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--crit); margin-left: auto; }
   .top .dot.on { background: var(--good); }
-  .row { display: grid; grid-template-columns: 30px 1fr auto; align-items: center; gap: 8px; padding: 2px 0; font-variant-numeric: tabular-nums; }
-  .row .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; color: var(--muted); }
-  .row .v { font-size: 13px; font-weight: 700; color: var(--ink); text-align: right; }
-  .row .t { font-size: 12px; font-weight: 700; text-align: right; min-width: 42px; }
+  .row { display: grid; grid-template-columns: minmax(30px, auto) 1fr auto; align-items: center; gap: 8px; padding: 2px 0; font-variant-numeric: tabular-nums; }
+  .row .k { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-transform: uppercase; max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .v { font-size: 13px; font-weight: 700; color: var(--ink); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .t { font-size: 12px; font-weight: 700; text-align: right; min-width: 36px; color: var(--ink-2); white-space: nowrap; }
   .bar { grid-column: 1 / -1; height: 3px; background: rgba(255,255,255,0.09); border-radius: 2px; overflow: hidden; margin-top: 1px; }
-  .bar > div { height: 100%; border-radius: 2px; transition: width .4s; }
+  .bar > div { height: 100%; border-radius: 2px; transition: width .4s; width: 0; background: var(--good); }
   #alert { display: none; margin-top: 6px; font-size: 10.5px; font-weight: 700; color: #fff; background: var(--crit); border-radius: 6px; padding: 3px 7px; }
   #alert.warn { background: var(--warn); color: #1a1a19; }
   #alert.show { display: block; }
-  .t.good { color: var(--good); } .t.warn { color: var(--warn); } .t.crit { color: var(--crit); }
-  .row[data-k="net"] .v, .row[data-k="net"] .t { font-size: 11.5px; }
+  .good { color: var(--good) !important; } .warnc { color: var(--warn) !important; } .critc { color: var(--crit) !important; }
+  /* compact strip: one horizontal line of values */
+  body.compact #card { padding: 5px 10px; min-width: 0; max-width: 900px; }
+  body.compact .top { display: none; }
+  body.compact #rows { display: flex; gap: 11px; align-items: baseline; }
+  body.compact .row { display: inline-flex; align-items: baseline; gap: 4px; padding: 0; }
+  body.compact .bar { display: none; }
+  body.compact .row .v { font-size: 12px; }
+  body.compact .row .t { min-width: 0; font-size: 11px; }
+  body.compact #alert { margin-top: 4px; }
 </style>
 </head>
 <body>
 <div id="card">
   <div class="top"><span class="brand">PULSE<i>_</i></span><span class="dot" id="dot"></span></div>
-  <div class="row" data-k="cpu"><span class="k">CPU</span><span class="v"><span id="cpu">–</span>%</span><span class="t" id="cpuT">–</span>
-    <div class="bar"><div id="cpuBar" style="width:0;background:var(--good)"></div></div></div>
-  <div class="row" data-k="gpu"><span class="k">GPU</span><span class="v"><span id="gpu">–</span>%</span><span class="t" id="gpuT">–</span>
-    <div class="bar"><div id="gpuBar" style="width:0;background:var(--good)"></div></div></div>
-  <div class="row" data-k="mem"><span class="k">RAM</span><span class="v"><span id="mem">–</span>%</span><span class="t" id="memGb" style="color:var(--ink-2);font-weight:600">–</span>
-    <div class="bar"><div id="memBar" style="width:0;background:var(--good)"></div></div></div>
-  <div class="row" data-k="net"><span class="k">NET</span><span class="v" id="netDown" style="color:var(--ink-2)">–</span><span class="t" id="netUp" style="color:var(--ink-2);font-weight:600">–</span></div>
+  <div id="rows"></div>
   <div id="alert"></div>
 </div>
 <script>
   const $ = id => document.getElementById(id);
   const bridge = window.pulseOverlay || null; // absent when opened in a plain browser
   const fmtRate = b => b >= 1e6 ? (b/1e6).toFixed(1)+' MB/s' : (b/1e3).toFixed(0)+' KB/s';
+  const fmtUp = s => { const d = Math.floor(s/86400), h = Math.floor(s%86400/3600), m = Math.floor(s%3600/60); return (d ? d+'d ' : '') + h + 'h ' + m + 'm'; };
   const loadColor = v => v > 92 ? 'var(--crit)' : v > 75 ? 'var(--warn)' : 'var(--good)';
-  const tempClass = (v, w, c) => v == null ? '' : v >= c ? 'crit' : v >= w ? 'warn' : 'good';
+  const tempClass = (v, w, c) => v == null ? '' : v >= c ? 'critc' : v >= w ? 'warnc' : 'good';
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
   let worst = 'good';
-  const bumpWorst = s => { const r = {good:0,warn:1,crit:2}; if (r[s] > r[worst]) worst = s; };
+  const bumpWorst = s => { const r = {good:0,warnc:1,critc:2}; if ((r[s]||0) > (r[worst]||0)) worst = s; };
 
-  // ----- content config (pushed from the tray / right-click menu) -----
-  let cfg = { cpu: true, gpu: true, mem: true, net: true, alerts: true };
-  function applyCfg() {
-    for (const k of ['cpu', 'gpu', 'mem', 'net'])
-      document.querySelector(`[data-k="${k}"]`).style.display = cfg[k] ? '' : 'none';
-    if (!cfg.alerts) $('alert').className = '';
+  // ----- state -----
+  let cfg = { items: [], appearance: { scale: 1, opacity: 0.86, compact: false } };
+  const data = { fast: null, gpu: null, sensors: [], events: null, health: null, procs: null };
+  const els = new Map(); // item id → {v, t, bar, k}
+
+  const METRIC_LABELS = { cpu:'CPU', gpu:'GPU', mem:'RAM', net:'NET', vram:'VRAM', gpupower:'GPU W', pagefile:'PAGE', uptime:'UP', health:'HP', topproc:'TOP', 'peak-gputemp':'GPU▲', 'peak-cputemp':'CPU▲' };
+
+  function rebuildRows() {
+    const rows = $('rows');
+    rows.innerHTML = '';
+    els.clear();
+    for (const it of cfg.items) {
+      if (it.on === false || (it.kind === 'metric' && it.metric === 'alerts')) continue;
+      const label = it.kind === 'sensor' ? (it.label || it.sensor.split('|').pop()) : (METRIC_LABELS[it.metric] || it.metric);
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `<span class="k" title="${esc(label)}">${esc(label)}</span><span class="v">–</span><span class="t"></span><div class="bar"><div></div></div>`;
+      rows.appendChild(row);
+      els.set(it.id, { k: row.children[0], v: row.children[1], t: row.children[2], bar: row.children[3].firstChild, barEl: row.children[3] });
+    }
+    applyAll();
     requestResize();
   }
+
+  const setBar = (e, pct) => { e.bar.style.width = Math.min(100, Math.max(0, pct)) + '%'; e.bar.style.background = loadColor(pct); };
+  const hideBar = e => { e.barEl.style.display = 'none'; };
+
+  function applyFast() {
+    const d = data.fast;
+    if (!d) return;
+    let e;
+    if (e = els.get('cpu')) { e.v.textContent = d.cpu.avg.toFixed(0) + '%'; setBar(e, d.cpu.avg); const cl = tempClass(d.temp, 85, 95); e.t.textContent = d.temp != null ? d.temp.toFixed(0) + '°' : ''; e.t.className = 't ' + cl; bumpWorst(cl); }
+    if (e = els.get('mem')) { const p = d.mem.used / d.mem.total * 100; e.v.textContent = p.toFixed(0) + '%'; e.t.textContent = (d.mem.used/1e9).toFixed(1) + ' GB'; setBar(e, p); }
+    if (e = els.get('net')) { e.v.textContent = '↓' + fmtRate(d.net.rx); e.t.textContent = '↑' + fmtRate(d.net.tx); hideBar(e); }
+    if (e = els.get('pagefile')) { e.v.textContent = (d.mem.swapUsed/1e9).toFixed(1) + ' GB'; e.t.textContent = 'of ' + (d.mem.swapTotal/1e9).toFixed(0); if (d.mem.swapTotal) setBar(e, d.mem.swapUsed/d.mem.swapTotal*100); else hideBar(e); }
+    if (e = els.get('uptime')) { e.v.textContent = fmtUp(d.uptime); hideBar(e); }
+  }
+  function applyGpu() {
+    const g = data.gpu;
+    if (!g) return;
+    let e;
+    if (e = els.get('gpu')) { const u = g['utilization.gpu']; if (u != null) { e.v.textContent = u.toFixed(0) + '%'; setBar(e, u); } const t = g['temperature.gpu']; const cl = tempClass(t, 83, 90); e.t.textContent = t != null ? t.toFixed(0) + '°' : ''; e.t.className = 't ' + cl; bumpWorst(cl); }
+    if (e = els.get('vram')) { if (g['memory.total']) { const p = g['memory.used']/g['memory.total']*100; e.v.textContent = p.toFixed(0) + '%'; e.t.textContent = (g['memory.used']/1024).toFixed(1) + ' GB'; setBar(e, p); } }
+    if (e = els.get('gpupower')) { if (g['power.draw'] != null) { e.v.textContent = g['power.draw'].toFixed(0) + ' W'; if (g['power.limit']) setBar(e, g['power.draw']/g['power.limit']*100); else hideBar(e); } }
+  }
+  function applySensors() {
+    for (const it of cfg.items) {
+      if (it.kind !== 'sensor') continue;
+      const e = els.get(it.id);
+      if (!e) continue;
+      const s = data.sensors.find(x => x.id === it.sensor);
+      if (!s || s.value == null) { e.v.textContent = '—'; hideBar(e); continue; }
+      const unit = s.unit || '';
+      e.v.textContent = unit === '°C' ? s.value.toFixed(0) + '°' : unit === 'RPM' ? s.value.toFixed(0) + ' RPM' : unit === 'V' ? s.value.toFixed(2) + ' V' : unit === 'W' ? s.value.toFixed(0) + ' W' : unit === '%' ? s.value.toFixed(0) + '%' : s.value.toFixed(1) + (unit ? ' ' + unit : '');
+      if (unit === '%') setBar(e, s.value); else hideBar(e);
+      if (unit === '°C') { const cl = tempClass(s.value, 85, 95); e.v.className = 'v ' + cl; }
+    }
+  }
+  function applyEvents() {
+    const d = data.events;
+    if (!d) return;
+    let e;
+    if (e = els.get('peak-gputemp')) { e.v.textContent = d.peaks && d.peaks.gpuTemp ? d.peaks.gpuTemp.value.toFixed(0) + '°' : '—'; e.t.textContent = 'max'; hideBar(e); }
+    if (e = els.get('peak-cputemp')) { e.v.textContent = d.peaks && d.peaks.cpuTemp ? d.peaks.cpuTemp.value.toFixed(0) + '°' : '—'; e.t.textContent = 'max'; hideBar(e); }
+    const alertsOn = cfg.items.some(i => i.kind === 'metric' && i.metric === 'alerts' && i.on !== false);
+    const on = alertsOn ? (d.ongoing || []) : [];
+    const a = $('alert');
+    const before = a.className;
+    if (on.length) {
+      const w = on.sort((x, y) => ({crit:3,warn:2,info:1}[y.sev]) - ({crit:3,warn:2,info:1}[x.sev]))[0];
+      const m = Math.floor(w.durationSec / 60), s = w.durationSec % 60;
+      a.textContent = `⚠ ${w.label} — ${w.peak}${w.unit} (${m ? m+'m ' : ''}${s}s)`;
+      a.className = 'show ' + (w.sev === 'crit' ? '' : 'warn');
+    } else a.className = '';
+    if (a.className !== before) requestResize();
+  }
+  function applyHealth() {
+    const e = els.get('health');
+    if (!e || !data.health) return;
+    const sc = data.health.score;
+    e.v.textContent = sc;
+    e.v.className = 'v ' + (sc >= 90 ? 'good' : sc >= 70 ? 'warnc' : 'critc');
+    e.t.textContent = '/100';
+    hideBar(e);
+  }
+  function applyProcs() {
+    const e = els.get('topproc');
+    if (!e || !data.procs || !data.procs.list || !data.procs.list.length) return;
+    const p = data.procs.list[0];
+    e.v.textContent = p.name.replace(/\.exe$/i, '');
+    e.t.textContent = p.cpu.toFixed(0) + '%';
+    setBar(e, p.cpu);
+  }
+  function applyAll() { applyFast(); applyGpu(); applySensors(); applyEvents(); applyHealth(); applyProcs(); paintCard(); }
+
+  function applyAppearance() {
+    const a = cfg.appearance || {};
+    document.body.style.zoom = a.scale || 1;
+    document.body.classList.toggle('compact', !!a.compact);
+    $('card').style.background = `rgba(12, 12, 15, ${a.opacity != null ? a.opacity : 0.86})`;
+    requestResize();
+  }
+
   let resizeQueued = false;
   function requestResize() {
     if (!bridge || resizeQueued) return;
     resizeQueued = true;
     requestAnimationFrame(() => {
       resizeQueued = false;
-      bridge.resize(document.getElementById('card').offsetHeight + 12);
+      const r = $('card').getBoundingClientRect();
+      bridge.resize({ w: Math.ceil(r.width) + 12, h: Math.ceil(r.height) + 12 });
     });
   }
-  if (bridge) bridge.onConfig(c => { cfg = c; applyCfg(); });
-
-  // ----- drag to move (main process follows the cursor) + right-click menu -----
-  const card = $('card');
-  card.addEventListener('mousedown', e => {
-    if (e.button !== 0 || !bridge) return;
-    card.classList.add('dragging');
-    bridge.dragStart();
-  });
-  window.addEventListener('mouseup', () => {
-    if (!bridge) return;
-    card.classList.remove('dragging');
-    bridge.dragEnd();
-  });
-  window.addEventListener('blur', () => { if (bridge) { card.classList.remove('dragging'); bridge.dragEnd(); } });
-  card.addEventListener('contextmenu', e => { e.preventDefault(); if (bridge) bridge.menu(); });
 
   function paintCard() {
+    const card = $('card');
     card.classList.remove('warn', 'crit');
-    if (worst !== 'good') card.classList.add(worst);
+    if (worst === 'warnc') card.classList.add('warn');
+    if (worst === 'critc') card.classList.add('crit');
     worst = 'good';
   }
 
+  // ----- drag + right-click menu -----
+  const card = $('card');
+  card.addEventListener('mousedown', e => { if (e.button !== 0 || !bridge) return; card.classList.add('dragging'); bridge.dragStart(); });
+  window.addEventListener('mouseup', () => { if (!bridge) return; card.classList.remove('dragging'); bridge.dragEnd(); });
+  window.addEventListener('blur', () => { if (bridge) { card.classList.remove('dragging'); bridge.dragEnd(); } });
+  card.addEventListener('contextmenu', e => { e.preventDefault(); if (bridge) bridge.menu(); });
+
+  // ----- data feeds -----
   const es = new EventSource('/api/live?c=overlay');
   es.onopen = () => $('dot').classList.add('on');
   es.onerror = () => $('dot').classList.remove('on');
+  es.addEventListener('fast', e => { data.fast = JSON.parse(e.data); applyFast(); paintCard(); });
+  es.addEventListener('gpu', e => { data.gpu = JSON.parse(e.data); applyGpu(); });
+  es.addEventListener('sensors', e => { const d = JSON.parse(e.data); data.sensors = d.sensors || []; applySensors(); });
+  es.addEventListener('overlaycfg', e => { cfg = JSON.parse(e.data); applyAppearance(); rebuildRows(); });
 
-  es.addEventListener('fast', e => {
-    const d = JSON.parse(e.data);
-    $('cpu').textContent = d.cpu.avg.toFixed(0);
-    $('cpuBar').style.width = Math.min(100, d.cpu.avg) + '%';
-    $('cpuBar').style.background = loadColor(d.cpu.avg);
-    if (d.temp != null) { const cl = tempClass(d.temp, 85, 95); $('cpuT').textContent = d.temp.toFixed(0)+'°'; $('cpuT').className = 't ' + cl; bumpWorst(cl); }
-    else $('cpuT').textContent = '';
-    const memPct = d.mem.used / d.mem.total * 100;
-    $('mem').textContent = memPct.toFixed(0);
-    $('memBar').style.width = Math.min(100, memPct) + '%';
-    $('memBar').style.background = loadColor(memPct);
-    $('memGb').textContent = (d.mem.used / 1e9).toFixed(1) + ' GB';
-    $('netDown').textContent = '↓' + fmtRate(d.net.rx);
-    $('netUp').textContent = '↑' + fmtRate(d.net.tx);
-    paintCard();
-  });
-  es.addEventListener('gpu', e => {
-    const g = JSON.parse(e.data);
-    const u = g['utilization.gpu'], t = g['temperature.gpu'];
-    if (u != null) { $('gpu').textContent = u.toFixed(0); $('gpuBar').style.width = Math.min(100, u)+'%'; $('gpuBar').style.background = loadColor(u); }
-    if (t != null) { const cl = tempClass(t, 83, 90); $('gpuT').textContent = t.toFixed(0)+'°'; $('gpuT').className = 't ' + cl; bumpWorst(cl); }
-  });
+  const has = pred => cfg.items.some(i => i.on !== false && pred(i));
+  setInterval(() => {
+    if (has(i => i.metric === 'alerts' || i.metric === 'peak-gputemp' || i.metric === 'peak-cputemp'))
+      fetch('/api/events').then(r => r.json()).then(d => { data.events = d; applyEvents(); }).catch(() => {});
+  }, 4000);
+  setInterval(() => {
+    if (has(i => i.metric === 'topproc'))
+      fetch('/api/processes').then(r => r.json()).then(d => { data.procs = d; applyProcs(); }).catch(() => {});
+  }, 5000);
+  setInterval(() => {
+    if (has(i => i.metric === 'health'))
+      fetch('/api/health').then(r => r.json()).then(d => { data.health = d; applyHealth(); }).catch(() => {});
+  }, 30000);
 
-  // ongoing-event banner (respects the alerts toggle; height changes trigger a re-fit)
-  async function pollEvents() {
-    try {
-      const d = await fetch('/api/events').then(r => r.json());
-      const on = cfg.alerts ? (d.ongoing || []) : [];
-      const a = $('alert');
-      const before = a.className;
-      if (on.length) {
-        const worstEv = on.sort((x, y) => ({crit:3,warn:2,info:1}[y.sev]) - ({crit:3,warn:2,info:1}[x.sev]))[0];
-        const m = Math.floor(worstEv.durationSec / 60), s = worstEv.durationSec % 60;
-        a.textContent = `⚠ ${worstEv.label} — ${worstEv.peak}${worstEv.unit} (${m ? m+'m ' : ''}${s}s)`;
-        a.className = 'show ' + (worstEv.sev === 'crit' ? '' : 'warn');
-      } else a.className = '';
-      if (a.className !== before) requestResize();
-    } catch {}
-  }
-  pollEvents();
-  setInterval(pollEvents, 4000);
-  applyCfg();
+  // initial load (SSE also pushes overlaycfg on connect; this covers plain-browser use)
+  fetch('/api/overlay').then(r => r.json()).then(c => { cfg = c; applyAppearance(); rebuildRows(); }).catch(() => {});
+  fetch('/api/events').then(r => r.json()).then(d => { data.events = d; applyEvents(); }).catch(() => {});
+  fetch('/api/processes').then(r => r.json()).then(d => { data.procs = d; }).catch(() => {});
+  fetch('/api/health').then(r => r.json()).then(d => { data.health = d; }).catch(() => {});
 </script>
 </body>
 </html>
