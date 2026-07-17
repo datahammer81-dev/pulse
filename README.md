@@ -29,7 +29,9 @@ drive SMART data, and more.
   its color.
 - **Runs in the background** — lives in the system tray; closing the window keeps
   it monitoring. A **mini overlay** (toggle from the tray) pins live CPU/GPU/RAM
-  and temps to the bottom-right corner, above the taskbar. Pulse is
+  and temps to the bottom-right corner — **drag it anywhere** on any monitor, and
+  **right-click it** to choose which rows show (CPU / GPU / RAM / network /
+  alerts); spot and rows are remembered. Pulse is
   **power-aware**: when its window is hidden it drops the live stream and slows
   collection, and it only enumerates all processes while you're viewing them —
   so a backgrounded Pulse costs almost nothing.

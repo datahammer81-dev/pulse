@@ -20,7 +20,9 @@
     box-shadow: 0 6px 22px rgba(0,0,0,0.5);
     backdrop-filter: blur(3px);
     transition: border-color .3s, box-shadow .3s;
+    cursor: grab;
   }
+  #card.dragging { cursor: grabbing; }
   #card.warn { border-color: rgba(250,178,25,0.55); box-shadow: 0 0 16px rgba(250,178,25,0.28); }
   #card.crit { border-color: rgba(255,77,77,0.7); box-shadow: 0 0 18px rgba(255,77,77,0.4); }
   .top { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
@@ -38,29 +40,67 @@
   #alert.warn { background: var(--warn); color: #1a1a19; }
   #alert.show { display: block; }
   .t.good { color: var(--good); } .t.warn { color: var(--warn); } .t.crit { color: var(--crit); }
+  .row[data-k="net"] .v, .row[data-k="net"] .t { font-size: 11.5px; }
 </style>
 </head>
 <body>
 <div id="card">
   <div class="top"><span class="brand">PULSE<i>_</i></span><span class="dot" id="dot"></span></div>
-  <div class="row"><span class="k">CPU</span><span class="v"><span id="cpu">–</span>%</span><span class="t" id="cpuT">–</span>
+  <div class="row" data-k="cpu"><span class="k">CPU</span><span class="v"><span id="cpu">–</span>%</span><span class="t" id="cpuT">–</span>
     <div class="bar"><div id="cpuBar" style="width:0;background:var(--good)"></div></div></div>
-  <div class="row"><span class="k">GPU</span><span class="v"><span id="gpu">–</span>%</span><span class="t" id="gpuT">–</span>
+  <div class="row" data-k="gpu"><span class="k">GPU</span><span class="v"><span id="gpu">–</span>%</span><span class="t" id="gpuT">–</span>
     <div class="bar"><div id="gpuBar" style="width:0;background:var(--good)"></div></div></div>
-  <div class="row"><span class="k">RAM</span><span class="v"><span id="mem">–</span>%</span><span class="t" id="net" style="color:var(--ink-2);font-weight:600">–</span>
+  <div class="row" data-k="mem"><span class="k">RAM</span><span class="v"><span id="mem">–</span>%</span><span class="t" id="memGb" style="color:var(--ink-2);font-weight:600">–</span>
     <div class="bar"><div id="memBar" style="width:0;background:var(--good)"></div></div></div>
+  <div class="row" data-k="net"><span class="k">NET</span><span class="v" id="netDown" style="color:var(--ink-2)">–</span><span class="t" id="netUp" style="color:var(--ink-2);font-weight:600">–</span></div>
   <div id="alert"></div>
 </div>
 <script>
   const $ = id => document.getElementById(id);
+  const bridge = window.pulseOverlay || null; // absent when opened in a plain browser
   const fmtRate = b => b >= 1e6 ? (b/1e6).toFixed(1)+' MB/s' : (b/1e3).toFixed(0)+' KB/s';
   const loadColor = v => v > 92 ? 'var(--crit)' : v > 75 ? 'var(--warn)' : 'var(--good)';
   const tempClass = (v, w, c) => v == null ? '' : v >= c ? 'crit' : v >= w ? 'warn' : 'good';
   let worst = 'good';
   const bumpWorst = s => { const r = {good:0,warn:1,crit:2}; if (r[s] > r[worst]) worst = s; };
 
+  // ----- content config (pushed from the tray / right-click menu) -----
+  let cfg = { cpu: true, gpu: true, mem: true, net: true, alerts: true };
+  function applyCfg() {
+    for (const k of ['cpu', 'gpu', 'mem', 'net'])
+      document.querySelector(`[data-k="${k}"]`).style.display = cfg[k] ? '' : 'none';
+    if (!cfg.alerts) $('alert').className = '';
+    requestResize();
+  }
+  let resizeQueued = false;
+  function requestResize() {
+    if (!bridge || resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      bridge.resize(document.getElementById('card').offsetHeight + 12);
+    });
+  }
+  if (bridge) bridge.onConfig(c => { cfg = c; applyCfg(); });
+
+  // ----- drag to move (main process follows the cursor) + right-click menu -----
+  const card = $('card');
+  card.addEventListener('mousedown', e => {
+    if (e.button !== 0 || !bridge) return;
+    card.classList.add('dragging');
+    bridge.dragStart();
+  });
+  window.addEventListener('mouseup', () => {
+    if (!bridge) return;
+    card.classList.remove('dragging');
+    bridge.dragEnd();
+  });
+  window.addEventListener('blur', () => { if (bridge) { card.classList.remove('dragging'); bridge.dragEnd(); } });
+  card.addEventListener('contextmenu', e => { e.preventDefault(); if (bridge) bridge.menu(); });
+
   function paintCard() {
-    $('card').className = worst === 'good' ? '' : worst;
+    card.classList.remove('warn', 'crit');
+    if (worst !== 'good') card.classList.add(worst);
     worst = 'good';
   }
 
@@ -79,7 +119,9 @@
     $('mem').textContent = memPct.toFixed(0);
     $('memBar').style.width = Math.min(100, memPct) + '%';
     $('memBar').style.background = loadColor(memPct);
-    $('net').textContent = '↓' + fmtRate(d.net.rx);
+    $('memGb').textContent = (d.mem.used / 1e9).toFixed(1) + ' GB';
+    $('netDown').textContent = '↓' + fmtRate(d.net.rx);
+    $('netUp').textContent = '↑' + fmtRate(d.net.tx);
     paintCard();
   });
   es.addEventListener('gpu', e => {
@@ -89,22 +131,25 @@
     if (t != null) { const cl = tempClass(t, 83, 90); $('gpuT').textContent = t.toFixed(0)+'°'; $('gpuT').className = 't ' + cl; bumpWorst(cl); }
   });
 
-  // ongoing-event banner
+  // ongoing-event banner (respects the alerts toggle; height changes trigger a re-fit)
   async function pollEvents() {
     try {
       const d = await fetch('/api/events').then(r => r.json());
-      const on = d.ongoing || [];
+      const on = cfg.alerts ? (d.ongoing || []) : [];
       const a = $('alert');
+      const before = a.className;
       if (on.length) {
         const worstEv = on.sort((x, y) => ({crit:3,warn:2,info:1}[y.sev]) - ({crit:3,warn:2,info:1}[x.sev]))[0];
         const m = Math.floor(worstEv.durationSec / 60), s = worstEv.durationSec % 60;
         a.textContent = `⚠ ${worstEv.label} — ${worstEv.peak}${worstEv.unit} (${m ? m+'m ' : ''}${s}s)`;
         a.className = 'show ' + (worstEv.sev === 'crit' ? '' : 'warn');
       } else a.className = '';
+      if (a.className !== before) requestResize();
     } catch {}
   }
   pollEvents();
   setInterval(pollEvents, 4000);
+  applyCfg();
 </script>
 </body>
 </html>
